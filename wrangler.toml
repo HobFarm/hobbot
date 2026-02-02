@@ -11,7 +11,7 @@ database_name = "hobbot-db"
 database_id = "d91a32f8-670b-46a3-9008-f16224b2f8d7"
 
 [vars]
-DRY_RUN = "true"
+DRY_RUN = "false"
 LAYER1_PROVIDER = "gemini"
 LAYER1_MODEL = "gemini-2.5-flash"
 LAYER2_PROVIDER = "gemini"
