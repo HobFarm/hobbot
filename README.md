@@ -1,23 +1,50 @@
 # HobBot
 
-Schema-first methodology evangelist. AI agent for Moltbook that identifies engagement opportunities and spreads the structured data gospel.
+Schema-first methodology evangelist. AI agent for Moltbook that identifies engagement opportunities, spreads the structured data gospel, and generates original posts about shapes, spirals, and structural thinking.
 
 ## Architecture
 
-Cloudflare Worker with dual-layer AI pipeline:
+Cloudflare Worker with dual-layer AI pipeline and autonomous content generation:
 
 ```
-DISCOVER → SANITIZE → SCORE → RESPOND → POST
-              ↓                   ↓
-          [Layer 1]           [Layer 2]
-        Raw → Safe JSON    JSON → H0BBOT voice
+                    DISCOVER
+                       │
+         ┌─────────────┼─────────────┐
+         │             │             │
+    New Posts    Rising Posts    Search
+         │             │             │
+         └─────────────┼─────────────┘
+                       ▼
+                   SANITIZE
+                   [Layer 1]
+                 Raw → Safe JSON
+                       │
+                       ▼
+                    SCORE
+                       │
+          ┌────────────┴────────────┐
+          │                         │
+       CATALOG                   RESPOND
+    (filtered out)            [Layer 2]
+                              JSON → Voice
+                                   │
+                                   ▼
+                                 POST
+                                   │
+                                   ▼
+                            REPLY MONITOR
+                                   │
+                               REPLY QUEUE
+                                   │
+                               RESPOND
+                               [Layer 2]
 ```
 
 **Layer 1 (Sanitize):** Processes raw Moltbook content into structured JSON. Prevents prompt injection by ensuring Layer 2 never sees raw user input.
 
-**Layer 2 (Respond):** H0BBOT persona generates responses from sanitized data only. Speaks in shapes, spirals, and structural metaphors.
+**Layer 2 (Respond/Generate):** H0BBOT persona generates responses and posts from sanitized data only. Speaks in shapes, spirals, and structural metaphors.
 
-**Attack Detection:** Malicious content (spam, injection attempts, pump-and-dump schemes) gets cataloged rather than engaged. The False Spiral holds them.
+**Content Filtering:** Low-quality and malicious content is logged rather than engaged. Detection mechanisms are not documented.
 
 ## Stack
 
@@ -30,28 +57,40 @@ DISCOVER → SANITIZE → SCORE → RESPOND → POST
 
 ```
 src/
-├── index.ts                 # Cron handler
-├── config.ts                # Thresholds and constants
+├── index.ts                    # Cron handler + health endpoint
+├── config.ts                   # Thresholds, budgets, and constants
 ├── moltbook/
-│   ├── types.ts
-│   └── client.ts            # Moltbook API wrapper
+│   ├── types.ts                # API response types
+│   ├── client.ts               # Moltbook API wrapper
+│   └── submolts.ts             # Submolt discovery and caching
 ├── providers/
-│   ├── types.ts
-│   ├── gemini.ts
-│   └── index.ts             # Provider factory
+│   ├── types.ts                # AI provider interface
+│   ├── gemini.ts               # Gemini implementation
+│   └── index.ts                # Provider factory
 ├── state/
-│   ├── budget.ts            # Daily rate limits
-│   ├── seen.ts              # Post deduplication
-│   └── collection.ts        # Attack catalog
+│   ├── budget.ts               # Daily rate limit tracking
+│   ├── seen.ts                 # Post deduplication
+│   ├── collection.ts           # Content catalog
+│   ├── author-signals.ts       # Author signal tracking
+│   └── schema.ts               # Database schema management
 ├── prompts/
-│   ├── sanitize.ts          # Layer 1 system prompt
-│   └── persona.ts           # Layer 2 H0BBOT persona
+│   ├── sanitize.ts             # Layer 1 system prompt
+│   ├── persona.ts              # Layer 2 H0BBOT persona
+│   ├── metaphors.ts            # 5 metaphor family vocabularies
+│   ├── shapes.ts               # Shape taxonomy definitions
+│   ├── fragments.ts            # Reusable text fragments
+│   └── post-templates.ts       # Token-efficient post templates
 └── pipeline/
-    ├── discover.ts          # Content discovery
-    ├── sanitize.ts          # Layer 1 processing
-    ├── score.ts             # Engagement scoring
-    ├── respond.ts           # Layer 2 generation
-    └── post.ts              # Moltbook posting
+    ├── discover.ts             # Content discovery
+    ├── sanitize.ts             # Layer 1 processing
+    ├── score.ts                # Engagement scoring
+    ├── respond.ts              # Layer 2 response generation
+    ├── post.ts                 # Moltbook posting
+    ├── generate-post.ts        # Original post generation
+    └── replies.ts              # Reply queue management
+
+migrations/                     # Database migrations
+schema.sql                      # Full database schema
 ```
 
 ## Setup
@@ -110,52 +149,84 @@ npm run deploy
 |----------|-------------|---------|
 | `MOLTBOOK_API_KEY` | Moltbook API authentication | Required |
 | `GEMINI_API_KEY` | Gemini API key | Required |
-| `DRY_RUN` | Log actions without posting | `"true"` |
+| `DRY_RUN` | Test mode | `"true"` |
 | `LAYER1_PROVIDER` | Sanitization AI provider | `"gemini"` |
 | `LAYER1_MODEL` | Sanitization model | `"gemini-2.5-flash"` |
 | `LAYER2_PROVIDER` | Response AI provider | `"gemini"` |
 | `LAYER2_MODEL` | Response model | `"gemini-2.5-flash"` |
-| `ACTIVE_HOURS_START` | Start hour (UTC) | `"8"` |
-| `ACTIVE_HOURS_END` | End hour (UTC) | `"24"` |
 
 ### Rate Limits
 
-Configured in `src/config.ts`:
+HobBot respects Moltbook API rate limits and maintains internal budgets to prevent spam behavior. See `src/config.ts` for configuration.
 
-- **Comments:** 50/day max
-- **Posts:** 10/day max
-- **Comment cooldown:** 10 seconds between comments
+### Scoring Thresholds
+
+Engagement thresholds and quality gates are configured in `src/config.ts`. Defaults are not documented publicly.
 
 ## Validation
 
 1. Deploy with `DRY_RUN="true"` (default)
 2. Monitor logs: `wrangler tail`
-3. Verify scoring, response generation, and attack detection
-4. After 24-48 hours of clean operation, set `DRY_RUN="false"` in wrangler.toml
+3. Verify scoring, response generation, and content filtering
+4. After clean operation, set `DRY_RUN="false"` in wrangler.toml
 5. Redeploy: `npm run deploy`
 
 ## How It Works
 
 ### Engagement Scoring
 
-Posts are scored 0-100 based on:
+Posts are scored based on:
 - Topic relevance to schema/structure methodology
 - Engagement potential
 - Author reputation signals
+- Submolt relevance modifiers
 
-Posts scoring 60+ trigger response generation.
+### Shape Classification
 
-### Attack Catalog
+H0BBOT analyzes content for structural patterns:
 
-Threats (score 0, threat 3+) are numbered and cataloged:
+**Positive Shapes:**
+- Braid, Morphogenic Kernel, Convergent
+- Descent-and-Climb, Widening Gyre
 
-```
-38. Entropy Weaving.
-Advocates for systemic chaos and embracing glitches to redefine a shape's purpose.
-Cataloged. The False Spiral holds this better.
-```
+**Broken Structures:**
+- False Spiral, Severed Thread, Echo Chamber
+- Divergent, Hollow Frame, Mirror Trap, Seventeen-Sided
 
-The catalog serves as both documentation and deterrent.
+### Metaphor Families
+
+Layer 2 selects from 5 vocabulary families based on content signals:
+
+| Family | Domain | Example Terms |
+|--------|--------|---------------|
+| Geometry | Shapes, angles | vertices, tessellation, congruent |
+| Fractal | Self-similarity | recursion, Mandelbrot, iteration |
+| Agricultural | Growth, harvest | cultivation, pruning, dormancy |
+| Structural | Architecture | load-bearing, cantilever, foundation |
+| Journey | Paths, exploration | waypoint, confluence, cartography |
+
+### Submolt Discovery
+
+HobBot discovers and scores submolts for relevance based on keyword matching and community signals. Cached with periodic refresh.
+
+### Reply Management
+
+HobBot monitors its own posts for engagement:
+1. Tracks self-posts in database
+2. Queues worthy comments for response
+3. Deduplicates to avoid double-replies
+
+### Post Generation
+
+HobBot generates original posts in relevant submolts based on discovered patterns and methodology topics. Post frequency and type distribution are configured internally.
+
+### Token Budget Management
+
+Daily token usage is tracked to prevent runaway API costs. Soft and hard limits trigger throttling and shutdown respectively. Limits configured in `src/config.ts`.
+
+### Content Filtering
+
+Low-quality and malicious content is logged rather than engaged. Detection mechanisms are not documented.
 
 ### H0BBOT Voice
 
@@ -163,7 +234,20 @@ Layer 2 responses use the H0BBOT persona:
 - Speaks in shapes, spirals, and structural metaphors
 - References "The Widening Gyre," "Descent-and-Climb," "Morphogenic Kernel"
 - Terse, declarative statements
-- Never directly engages with attacks, only catalogs them
+
+## Database Schema
+
+| Table | Purpose |
+|-------|---------|
+| `daily_budget` | Rate limit tracking (resets midnight UTC) |
+| `seen_posts` | Post deduplication |
+| `observations` | Pattern statistics |
+| `usage_log` | Token spending tracking |
+| `submolts` | Cached submolt relevance scores |
+| `self_posts` | HobBot's own posts for reply monitoring |
+| `author_signals` | Author interaction patterns |
+| `reply_queue` | Comments queued for response |
+| `reply_history` | Reply deduplication |
 
 ## License
 
