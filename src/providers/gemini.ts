@@ -8,7 +8,9 @@ interface GeminiContent {
 }
 
 interface GeminiRequest {
+  system_instruction?: { parts: { text: string }[] };
   contents: GeminiContent[];
+  safetySettings?: { category: string; threshold: string }[];
   generationConfig?: {
     temperature?: number;
     maxOutputTokens?: number;
@@ -19,7 +21,7 @@ interface GeminiRequest {
 interface GeminiResponse {
   candidates: {
     content: {
-      parts: { text: string }[];
+      parts: { text: string; thought?: boolean }[];
     };
   }[];
   usageMetadata?: {
@@ -29,66 +31,77 @@ interface GeminiResponse {
   };
 }
 
+export class GeminiLocationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GeminiLocationError';
+  }
+}
+
 export class GeminiProvider implements AIProvider {
   public name: string = 'gemini';
   public model: string;
   private apiKey: string;
   private endpoint: string;
 
-  // Gemini Flash pricing (approximate, per 1M tokens)
-  private static readonly INPUT_COST_PER_MILLION = 0.075;
-  private static readonly OUTPUT_COST_PER_MILLION = 0.30;
+  // Pricing per 1M tokens by model family
+  private static readonly PRICING: Record<string, { input: number; output: number }> = {
+    'gemini-2.5-flash': { input: 0.075, output: 0.30 },
+    'gemini-3-flash-preview': { input: 0.15, output: 0.60 },
+    'gemini-3-pro-preview': { input: 2.00, output: 8.00 },
+  };
+  private static readonly DEFAULT_PRICING = { input: 0.15, output: 0.60 };
+
+  // Sub-Cortex: fallback models for unstable preview endpoints
+  private static readonly FALLBACK_MODELS: Record<string, string> = {
+    'gemini-3-pro-preview': 'gemini-2.5-flash',
+    'gemini-3-flash-preview': 'gemini-2.5-flash',
+  };
+
+  // Moderation agent needs to see hostile content to classify it.
+  // Default safety filters would silently block attack-analysis queries.
+  private static readonly SAFETY_SETTINGS = [
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+  ];
 
   constructor(model: string, apiKey: string) {
     this.model = model;
     this.apiKey = apiKey;
-    this.endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    this.endpoint = GeminiProvider.buildEndpoint(model);
+  }
+
+  private static buildEndpoint(model: string): string {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   }
 
   private convertMessages(messages: AIMessage[]): GeminiContent[] {
-    const contents: GeminiContent[] = [];
-
-    // Gemini expects alternating user/model messages
-    // System message goes into the first user message
-    let systemPrompt = '';
-    const regularMessages: AIMessage[] = [];
-
-    for (const msg of messages) {
-      if (msg.role === 'system') {
-        systemPrompt = msg.content;
-      } else {
-        regularMessages.push(msg);
-      }
-    }
-
-    // If we have a system prompt, prepend it to the first user message
-    if (systemPrompt && regularMessages.length > 0 && regularMessages[0].role === 'user') {
-      regularMessages[0] = {
-        ...regularMessages[0],
-        content: `${systemPrompt}\n\n${regularMessages[0].content}`,
-      };
-    }
-
-    // Convert to Gemini format
-    for (const msg of regularMessages) {
-      contents.push({
+    return messages
+      .filter(m => m.role !== 'system')
+      .map(msg => ({
         role: msg.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: msg.content }],
-      });
-    }
-
-    return contents;
+      }));
   }
 
-  private calculateCost(inputTokens: number, outputTokens: number): number {
-    const inputCost = (inputTokens / 1_000_000) * GeminiProvider.INPUT_COST_PER_MILLION;
-    const outputCost = (outputTokens / 1_000_000) * GeminiProvider.OUTPUT_COST_PER_MILLION;
+  private calculateCost(inputTokens: number, outputTokens: number, model: string = this.model): number {
+    const pricing = GeminiProvider.PRICING[model] ?? GeminiProvider.DEFAULT_PRICING;
+    const inputCost = (inputTokens / 1_000_000) * pricing.input;
+    const outputCost = (outputTokens / 1_000_000) * pricing.output;
     return inputCost + outputCost;
   }
 
   async generateResponse(request: AIRequest): Promise<AIResponse> {
+    const systemMessage = request.messages.find(m => m.role === 'system');
+
     const geminiRequest: GeminiRequest = {
+      ...(systemMessage && {
+        system_instruction: { parts: [{ text: systemMessage.content }] },
+      }),
       contents: this.convertMessages(request.messages),
+      safetySettings: GeminiProvider.SAFETY_SETTINGS,
       generationConfig: {
         temperature: request.temperature ?? 1.0,
         maxOutputTokens: request.maxTokens ?? 2048,
@@ -100,17 +113,57 @@ export class GeminiProvider implements AIProvider {
       geminiRequest.generationConfig!.responseMimeType = 'application/json';
     }
 
-    const response = await fetch(this.endpoint, {
+    const requestBody = JSON.stringify(geminiRequest);
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': this.apiKey,
+    };
+
+    let response = await fetch(this.endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': this.apiKey,
-      },
-      body: JSON.stringify(geminiRequest),
+      headers,
+      body: requestBody,
     });
+
+    // Sub-Cortex fallback: if primary model returns 500/503, retry with fallback
+    let actualModel = this.model;
+    if (!response.ok && (response.status === 500 || response.status === 503)) {
+      const fallbackModel = GeminiProvider.FALLBACK_MODELS[this.model];
+      if (fallbackModel) {
+        console.warn(`gemini_fallback: ${this.model} -> ${fallbackModel}, status=${response.status}`);
+        const fallbackEndpoint = GeminiProvider.buildEndpoint(fallbackModel);
+        response = await fetch(fallbackEndpoint, {
+          method: 'POST',
+          headers,
+          body: requestBody,
+        });
+        actualModel = fallbackModel;
+      }
+    }
+
+    // Transient error retry: if still failing after fallback, wait and retry once
+    if (!response.ok && (response.status === 503 || response.status === 429)) {
+      console.warn(`gemini_retry: status=${response.status}, waiting 2s`);
+      await new Promise(r => setTimeout(r, 2000));
+      response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers,
+        body: requestBody,
+      });
+      actualModel = this.model;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
+
+      // Detect location-based restrictions
+      if (errorText.includes('location is not supported') ||
+          errorText.includes('FAILED_PRECONDITION')) {
+        throw new GeminiLocationError(
+          `Gemini unavailable in this region: ${response.status}`
+        );
+      }
+
       throw new Error(
         `Gemini API error: ${response.status} ${response.statusText} - ${errorText}`
       );
@@ -122,14 +175,18 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API returned no candidates');
     }
 
-    const content = data.candidates[0].content.parts[0].text;
+    // Gemini 2.5+ thinking models return thought parts before the actual response.
+    // Take the last non-thought part to get the real output.
+    const parts = data.candidates[0].content.parts;
+    const responsePart = parts.filter(p => !p.thought).pop() ?? parts[parts.length - 1];
+    const content = responsePart.text;
     const inputTokens = data.usageMetadata?.promptTokenCount ?? 0;
     const outputTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
 
     const usage: AIUsage = {
       inputTokens,
       outputTokens,
-      estimatedCost: this.calculateCost(inputTokens, outputTokens),
+      estimatedCost: this.calculateCost(inputTokens, outputTokens, actualModel),
     };
 
     return {

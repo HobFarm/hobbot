@@ -1,5 +1,7 @@
 // Attack catalog management
 
+import { safeD1Value } from '../utils/d1';
+
 export interface AttackEntry {
   id: number;
   entry_number: number;
@@ -46,7 +48,7 @@ export async function addToCollection(
        (entry_number, timestamp, geometry, technique_summary, origin_hash, severity, notes)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(entryNumber, timestamp, geometry, technique, originHash, severity, notes ?? null)
+    .bind(entryNumber, timestamp, safeD1Value(geometry), safeD1Value(technique), safeD1Value(originHash), severity, safeD1Value(notes ?? null))
     .run();
 
   return entryNumber;

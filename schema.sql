@@ -8,8 +8,12 @@ CREATE TABLE IF NOT EXISTS daily_budget (
   comments_max INTEGER DEFAULT 50,
   posts_used INTEGER DEFAULT 0,
   posts_max INTEGER DEFAULT 10,
+  replies_used INTEGER DEFAULT 0,
+  replies_max INTEGER DEFAULT 50,
   last_post_at TEXT,
-  last_comment_at TEXT
+  last_comment_at TEXT,
+  last_reply_at TEXT,
+  last_metaphor_family TEXT DEFAULT 'geometry'
 );
 
 CREATE TABLE IF NOT EXISTS seen_posts (

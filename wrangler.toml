@@ -2,8 +2,8 @@ name = "hobbot-worker"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
-[triggers]
-crons = ["*/15 * * * *"]
+# [triggers]
+# crons = ["*/15 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -13,8 +13,23 @@ database_id = "d91a32f8-670b-46a3-9008-f16224b2f8d7"
 [vars]
 DRY_RUN = "false"
 LAYER1_PROVIDER = "gemini"
-LAYER1_MODEL = "gemini-2.5-flash"
+LAYER1_MODEL = "gemini-3-flash-preview"
 LAYER2_PROVIDER = "gemini"
-LAYER2_MODEL = "gemini-2.5-flash"
-ACTIVE_HOURS_START = "8"
+LAYER2_MODEL = "gemini-3-pro-preview"
+ACTIVE_HOURS_START = "0"
 ACTIVE_HOURS_END = "24"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
