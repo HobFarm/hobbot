@@ -2,7 +2,7 @@
 // Finds atoms with stale category assignments, orphaned collection references,
 // and arrangements referencing missing categories
 
-import { getCategories, getCollections, getArrangements } from '../state/grimoire'
+import { getArrangements } from '../state/grimoire'
 import type { IntegrityIssue } from '../grimoire/types'
 
 interface ScanChunk {
@@ -14,46 +14,43 @@ interface ScanChunk {
 export async function detectDrift(db: D1Database): Promise<IntegrityIssue[]> {
   const issues: IntegrityIssue[] = []
 
-  const [categories, collections, arrangements] = await Promise.all([
-    getCategories(db),
-    getCollections(db),
-    getArrangements(db),
-  ])
+  const arrangements = await getArrangements(db)
 
-  const catSlugs = new Set(categories.map(c => c.slug))
-  const colSlugs = new Set(collections.map(c => c.slug))
-
-  const { count } = await db.prepare('SELECT COUNT(*) as count FROM atoms').first<{ count: number }>() ?? { count: 0 }
-  const chunkSize = 500
-  let offset = 0
-
-  while (offset < count) {
-    const chunk = await db.prepare(
-      'SELECT id, category_slug, collection_slug FROM atoms LIMIT ? OFFSET ?'
-    ).bind(chunkSize, offset).all<ScanChunk>()
-
-    for (const row of chunk.results ?? []) {
-      if (row.category_slug && !catSlugs.has(row.category_slug)) {
-        issues.push({
-          type: 'missing_category',
-          atom_id: row.id,
-          description: `category '${row.category_slug}' not in categories table`,
-          severity: 'high',
-        })
-      }
-      if (!colSlugs.has(row.collection_slug)) {
-        issues.push({
-          type: 'orphan',
-          atom_id: row.id,
-          description: `collection '${row.collection_slug}' not in collections table`,
-          severity: 'medium',
-        })
-      }
-    }
-
-    offset += chunkSize
+  // Atoms referencing categories that don't exist in the categories table
+  const badCatResult = await db.prepare(
+    `SELECT id, category_slug FROM atoms
+     WHERE category_slug IS NOT NULL AND category_slug != ''
+     AND category_slug NOT IN (SELECT slug FROM categories)
+     LIMIT 100`
+  ).all<ScanChunk>()
+  for (const row of badCatResult.results ?? []) {
+    issues.push({
+      type: 'missing_category',
+      atom_id: row.id,
+      description: `category '${row.category_slug}' not in categories table`,
+      severity: 'high',
+    })
   }
 
+  // Atoms referencing collections that don't exist
+  const badColResult = await db.prepare(
+    `SELECT id, collection_slug FROM atoms
+     WHERE collection_slug NOT IN (SELECT slug FROM collections)
+     LIMIT 100`
+  ).all<ScanChunk>()
+  for (const row of badColResult.results ?? []) {
+    issues.push({
+      type: 'orphan',
+      atom_id: row.id,
+      description: `collection '${row.collection_slug}' not in collections table`,
+      severity: 'medium',
+    })
+  }
+
+  // Arrangements referencing missing categories
+  const catSlugs = new Set(
+    ((await db.prepare('SELECT slug FROM categories').all<{ slug: string }>()).results ?? []).map(r => r.slug)
+  )
   for (const arr of arrangements) {
     const weights = arr.category_weights as Record<string, number>
     for (const slug of Object.keys(weights)) {
@@ -67,17 +64,12 @@ export async function detectDrift(db: D1Database): Promise<IntegrityIssue[]> {
     }
   }
 
-  // Atoms with complete embeddings but no correspondence entries
-  // (harmonic discovery should have linked them)
+  // Atoms with complete embeddings but no correspondence entries (sampled count)
   const embeddingRow = await db.prepare(
-    `SELECT COUNT(*) as count FROM atoms
-     WHERE embedding_status = 'complete'
-     AND status != 'rejected'
-     AND id NOT IN (
-       SELECT DISTINCT atom_a_id FROM correspondences
-       UNION
-       SELECT DISTINCT atom_b_id FROM correspondences
-     )`
+    `SELECT COUNT(*) as count FROM atoms a
+     WHERE a.embedding_status = 'complete'
+     AND a.status != 'rejected'
+     AND NOT EXISTS (SELECT 1 FROM correspondences WHERE atom_a_id = a.id OR atom_b_id = a.id)`
   ).first<{ count: number }>()
   const ungraphed = embeddingRow?.count ?? 0
   if (ungraphed > 0) {
@@ -88,25 +80,29 @@ export async function detectDrift(db: D1Database): Promise<IntegrityIssue[]> {
     })
   }
 
-  // Correspondences referencing atom IDs that no longer exist
+  // Correspondences referencing deleted atoms (sampled, limit to avoid full scan)
   const orphanedRefRow = await db.prepare(
-    `SELECT COUNT(*) as count FROM correspondences c
-     WHERE NOT EXISTS (SELECT 1 FROM atoms WHERE id = c.atom_a_id)
-        OR NOT EXISTS (SELECT 1 FROM atoms WHERE id = c.atom_b_id)`
+    `SELECT COUNT(*) as count FROM (
+       SELECT 1 FROM correspondences c
+       WHERE NOT EXISTS (SELECT 1 FROM atoms WHERE id = c.atom_a_id)
+          OR NOT EXISTS (SELECT 1 FROM atoms WHERE id = c.atom_b_id)
+       LIMIT 1000
+     )`
   ).first<{ count: number }>()
   const orphanedRefs = orphanedRefRow?.count ?? 0
   if (orphanedRefs > 0) {
     issues.push({
       type: 'orphaned_ref',
-      description: `${orphanedRefs} correspondence rows reference atom IDs not in atoms table`,
+      description: `${orphanedRefs}+ correspondence rows reference atom IDs not in atoms table`,
       severity: 'high',
     })
   }
 
-  // Categories with zero atoms assigned (informational)
+  // Categories with zero atoms (single query, no chunk scan)
   const emptyCatResult = await db.prepare(
-    `SELECT slug FROM categories
-     WHERE slug NOT IN (SELECT DISTINCT category_slug FROM atoms WHERE category_slug IS NOT NULL)`
+    `SELECT c.slug FROM categories c
+     WHERE NOT EXISTS (SELECT 1 FROM atoms WHERE category_slug = c.slug)
+     LIMIT 20`
   ).all<{ slug: string }>()
   for (const row of emptyCatResult.results ?? []) {
     issues.push({
