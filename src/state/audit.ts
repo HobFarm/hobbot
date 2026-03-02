@@ -1,59 +1,41 @@
-// Audit logging module (Phase 7)
-// Append-only record of all HobBot actions
+// Grimoire validation event log: write, scan, and rejection events
 
-export type AuditAction =
-  | 'post'
-  | 'comment'
-  | 'reply'
-  | 'upvote'
-  | 'dm'
-  | 'validation_reject'
-  | 'catalog'
-  | 'deflection';
+export type AuditTrigger = 'write' | 'scan' | 'demand'
+export type AuditResult = 'pass' | 'warn' | 'fail'
 
-export type AuditOutcome =
-  | 'success'
-  | 'failed'
-  | 'skipped'
-  | 'dry_run';
-
-/**
- * Log an action to the audit table
- */
-export async function logAudit(
+export async function logValidationEvent(
   db: D1Database,
-  actionType: AuditAction,
-  targetId: string | null,
-  targetAuthor: string | null,
-  contentHash: string | null,
-  outcome: AuditOutcome,
-  metadata: Record<string, unknown> = {}
+  triggerType: AuditTrigger,
+  atomId: string | null,
+  result: AuditResult,
+  details: Record<string, unknown> = {}
 ): Promise<void> {
   try {
-    await db.prepare(`
-      INSERT INTO audit_log (action_type, target_id, target_author, content_hash, outcome, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(
-      actionType,
-      targetId ?? null,
-      targetAuthor ?? null,
-      contentHash ?? null,
-      outcome,
-      JSON.stringify(metadata)
-    ).run();
+    await db.prepare(
+      `INSERT INTO validation_log (trigger_type, atom_id, result, details)
+       VALUES (?, ?, ?, ?)`
+    ).bind(triggerType, atomId ?? null, result, JSON.stringify(details)).run()
   } catch (error) {
-    // Don't let audit logging failures break the main flow
-    console.log('Audit logging failed:', error);
+    console.error('audit_log_fail', error)
   }
 }
 
-/**
- * Hash content using Web Crypto API (Cloudflare Workers compatible)
- */
+export async function getRecentValidationResults(
+  db: D1Database,
+  limit = 20
+): Promise<{ result: AuditResult; count: number }[]> {
+  const rows = await db.prepare(
+    `SELECT result, COUNT(*) as count FROM validation_log
+     WHERE created_at >= datetime('now', '-24 hours')
+     GROUP BY result`
+  ).all<{ result: AuditResult; count: number }>()
+  return (rows.results ?? []).slice(0, limit)
+}
+
 export async function hashContent(content: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(content);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const encoder = new TextEncoder()
+  const data = encoder.encode(content)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
 }

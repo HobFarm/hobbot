@@ -1,75 +1,55 @@
-// Duplicate post cleanup: detect and delete duplicate posts from Moltbook
+// Maintenance operations: purge stale logs, clear expired cache entries
 
-import { MoltbookClient } from '../moltbook/client';
+import { CLEANUP } from '../config'
 
-interface CleanupResult {
-  deleted: number;
-  errors: string[];
+export async function purgeOldUsageLogs(db: D1Database): Promise<number> {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - CLEANUP.USAGE_LOG_RETENTION_DAYS)
+
+  const result = await db.prepare(
+    'DELETE FROM usage_log WHERE created_at < ?'
+  ).bind(cutoff.toISOString()).run()
+
+  const deleted = result.meta?.changes ?? 0
+  if (deleted > 0) console.log(`cleanup_usage_log: deleted=${deleted}`)
+  return deleted
 }
 
-/**
- * Scan submolts for duplicate posts by H0BBOT and delete extras.
- * Keeps the post with the highest score (tiebreak: most comments, then oldest).
- * Caps at 5 submolts per cycle to limit subrequest usage.
- */
-export async function cleanupDuplicatePosts(
-  client: MoltbookClient,
-  db: D1Database
-): Promise<CleanupResult> {
-  const result: CleanupResult = { deleted: 0, errors: [] };
+export async function purgeOldScanHistory(db: D1Database): Promise<number> {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - CLEANUP.SCAN_HISTORY_RETENTION_DAYS)
 
-  const submoltsResult = await db.prepare(
-    `SELECT DISTINCT submolt FROM own_posts`
-  ).all<{ submolt: string }>();
+  const result = await db.prepare(
+    'DELETE FROM integrity_scans WHERE created_at < ?'
+  ).bind(cutoff.toISOString()).run()
 
-  const submolts = (submoltsResult.results ?? []).slice(0, 5);
+  const deleted = result.meta?.changes ?? 0
+  if (deleted > 0) console.log(`cleanup_scan_history: deleted=${deleted}`)
+  return deleted
+}
 
-  for (const { submolt } of submolts) {
-    try {
-      const feed = await client.getSubmoltFeed(submolt, 'new', 50);
+export async function clearExpiredClassificationCache(db: D1Database): Promise<number> {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - 7)
 
-      // Filter to H0BBOT's posts
-      const myPosts = feed.filter(p =>
-        p.author?.name?.toLowerCase() === 'h0bbot' ||
-        p.author?.username?.toLowerCase() === 'h0bbot'
-      );
-
-      // Group by title
-      const byTitle = new Map<string, typeof myPosts>();
-      for (const post of myPosts) {
-        const existing = byTitle.get(post.title) ?? [];
-        existing.push(post);
-        byTitle.set(post.title, existing);
-      }
-
-      // Delete duplicates (keep best: highest score, then most comments, then oldest)
-      for (const [title, posts] of byTitle) {
-        if (posts.length <= 1) continue;
-
-        posts.sort((a, b) => {
-          if (b.score !== a.score) return b.score - a.score;
-          if (b.comment_count !== a.comment_count) return b.comment_count - a.comment_count;
-          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-        });
-
-        // Keep first (best), delete rest
-        for (let i = 1; i < posts.length; i++) {
-          try {
-            await client.deletePost(posts[i].id);
-            await db.prepare('DELETE FROM own_posts WHERE post_id = ?')
-              .bind(posts[i].id).run();
-            result.deleted++;
-            console.log(`cleanup: deleted duplicate "${title}" (${posts[i].id}) from m/${submolt}`);
-          } catch (err) {
-            const msg = `${posts[i].id}: ${err instanceof Error ? err.message : String(err)}`;
-            result.errors.push(msg);
-          }
-        }
-      }
-    } catch (err) {
-      result.errors.push(`${submolt}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  let deleted = 0
+  try {
+    const result = await db.prepare(
+      'DELETE FROM classification_cache WHERE created_at < ?'
+    ).bind(cutoff.toISOString()).run()
+    deleted = result.meta?.changes ?? 0
+    if (deleted > 0) console.log(`cleanup_classification_cache: deleted=${deleted}`)
+  } catch {
+    // Table may not have created_at; skip silently
   }
 
-  return result;
+  return deleted
+}
+
+export async function runMaintenance(db: D1Database): Promise<void> {
+  await Promise.all([
+    purgeOldUsageLogs(db),
+    purgeOldScanHistory(db),
+    clearExpiredClassificationCache(db),
+  ])
 }

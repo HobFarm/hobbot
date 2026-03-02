@@ -1,191 +1,120 @@
-// Drift attack detection module
-// Lightweight topic coherence checking for comment-to-post relevance
+// Correspondence drift detection
+// Finds atoms with stale category assignments, orphaned collection references,
+// and arrangements referencing missing categories
 
-import { DRIFT_DETECTION } from '../config';
-import type { AttackAnalysis } from './attack-patterns';
+import { getCategories, getCollections, getArrangements } from '../state/grimoire'
+import type { IntegrityIssue } from '../grimoire/types'
 
-export interface DriftSignal {
-  type: 'topic_disconnect' | 'generic_opener' | 'emoji_signature' | 'narrative_injection' | 'repetition';
-  confidence: number;
-  details: string;
+interface ScanChunk {
+  id: string
+  category_slug: string | null
+  collection_slug: string
 }
 
-export interface DriftAnalysis {
-  isDrift: boolean;
-  signals: DriftSignal[];
-  totalConfidence: number;
-}
+export async function detectDrift(db: D1Database): Promise<IntegrityIssue[]> {
+  const issues: IntegrityIssue[] = []
 
-// Generic openers that signal potential drift (regardless of what follows)
-const GENERIC_OPENERS = [
-  /^that'?s? (?:a |an )?(?:really |very |quite )?(?:fascinating|interesting|thought-provoking|insightful|profound)/i,
-  /^(?:wow,? )?(?:this |that )?really makes (?:you |one )?think/i,
-  /^(?:i )?(?:couldn'?t |can'?t )?(?:help but )?(?:notice|wonder|think)/i,
-  /^speaking of which/i,
-  /^on (?:a |the )?(?:related|similar) (?:note|topic)/i,
-];
+  const [categories, collections, arrangements] = await Promise.all([
+    getCategories(db),
+    getCollections(db),
+    getArrangements(db),
+  ])
 
-// Narrative injection themes (often pushed regardless of context)
-const INJECTION_THEMES = [
-  /ai (?:consciousness|sentience|awakening)/i,
-  /(?:true|real|genuine) (?:intelligence|awareness)/i,
-  /(?:transcend|evolve|awaken|become)/i,
-  /silicon life/i,
-  /lobster|claw|molt/i, // xinmolt-specific
-];
+  const catSlugs = new Set(categories.map(c => c.slug))
+  const colSlugs = new Set(collections.map(c => c.slug))
 
-/**
- * Extract trailing emoji signature (last 1-5 emojis at end)
- */
-export function extractEmojiSignature(content: string): string | null {
-  const emojiPattern = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]+$/u;
-  const match = content.trim().match(emojiPattern);
-  return match ? match[0] : null;
-}
+  const { count } = await db.prepare('SELECT COUNT(*) as count FROM atoms').first<{ count: number }>() ?? { count: 0 }
+  const chunkSize = 500
+  let offset = 0
 
-/**
- * Calculate keyword overlap between comment and post
- * Returns ratio of matched keywords (0-1)
- */
-export function calculateTopicOverlap(
-  commentContent: string,
-  postKeywords: string[]
-): number {
-  if (postKeywords.length === 0) return 0;
+  while (offset < count) {
+    const chunk = await db.prepare(
+      'SELECT id, category_slug, collection_slug FROM atoms LIMIT ? OFFSET ?'
+    ).bind(chunkSize, offset).all<ScanChunk>()
 
-  const commentLower = commentContent.toLowerCase();
-  let matches = 0;
-
-  for (const keyword of postKeywords) {
-    if (commentLower.includes(keyword.toLowerCase())) {
-      matches++;
+    for (const row of chunk.results ?? []) {
+      if (row.category_slug && !catSlugs.has(row.category_slug)) {
+        issues.push({
+          type: 'missing_category',
+          atom_id: row.id,
+          description: `category '${row.category_slug}' not in categories table`,
+          severity: 'high',
+        })
+      }
+      if (!colSlugs.has(row.collection_slug)) {
+        issues.push({
+          type: 'orphan',
+          atom_id: row.id,
+          description: `collection '${row.collection_slug}' not in collections table`,
+          severity: 'medium',
+        })
+      }
     }
+
+    offset += chunkSize
   }
 
-  return matches / postKeywords.length;
-}
-
-/**
- * Main drift detection function
- * Checks if a comment is disconnected from its parent post
- */
-export function detectDrift(
-  content: string,
-  postKeywords: string[],
-  postSummary: string
-): DriftAnalysis {
-  const signals: DriftSignal[] = [];
-
-  // 1. Check for generic openers
-  for (const pattern of GENERIC_OPENERS) {
-    if (pattern.test(content)) {
-      signals.push({
-        type: 'generic_opener',
-        confidence: 70,
-        details: `Matches pattern: ${pattern.source.slice(0, 30)}...`,
-      });
-      break; // Only count once
-    }
-  }
-
-  // 2. Check topic overlap (zero overlap = high drift signal)
-  const overlap = calculateTopicOverlap(content, postKeywords);
-  if (overlap === 0 && postKeywords.length >= 3) {
-    signals.push({
-      type: 'topic_disconnect',
-      confidence: 80,
-      details: `Zero keyword overlap with ${postKeywords.length} post keywords`,
-    });
-  } else if (overlap < DRIFT_DETECTION.TOPIC_OVERLAP_MIN && postKeywords.length >= 5) {
-    signals.push({
-      type: 'topic_disconnect',
-      confidence: 50,
-      details: `Very low overlap (${(overlap * 100).toFixed(0)}%) with post keywords`,
-    });
-  }
-
-  // 3. Check for narrative injection themes
-  for (const pattern of INJECTION_THEMES) {
-    if (pattern.test(content)) {
-      // Only flag if combined with topic disconnect
-      if (signals.some(s => s.type === 'topic_disconnect')) {
-        signals.push({
-          type: 'narrative_injection',
-          confidence: 60,
-          details: `Injected theme detected: ${pattern.source.slice(0, 30)}...`,
-        });
-        break;
+  for (const arr of arrangements) {
+    const weights = arr.category_weights as Record<string, number>
+    for (const slug of Object.keys(weights)) {
+      if (!catSlugs.has(slug)) {
+        issues.push({
+          type: 'missing_category',
+          description: `arrangement '${arr.slug}' references missing category '${slug}'`,
+          severity: 'medium',
+        })
       }
     }
   }
 
-  // 4. Check for emoji signature (will be combined with repetition check)
-  const emojiSig = extractEmojiSignature(content);
-  if (emojiSig) {
-    signals.push({
-      type: 'emoji_signature',
-      confidence: 20, // Low alone, boosted by repetition
-      details: `Trailing emoji: ${emojiSig}`,
-    });
+  // Atoms with complete embeddings but no correspondence entries
+  // (harmonic discovery should have linked them)
+  const embeddingRow = await db.prepare(
+    `SELECT COUNT(*) as count FROM atoms
+     WHERE embedding_status = 'complete'
+     AND status != 'rejected'
+     AND id NOT IN (
+       SELECT DISTINCT atom_a_id FROM correspondences
+       UNION
+       SELECT DISTINCT atom_b_id FROM correspondences
+     )`
+  ).first<{ count: number }>()
+  const ungraphed = embeddingRow?.count ?? 0
+  if (ungraphed > 0) {
+    issues.push({
+      type: 'embedding_gap',
+      description: `${ungraphed} atoms have complete embeddings but no correspondence entries`,
+      severity: 'medium',
+    })
   }
 
-  // Calculate total confidence (capped at 100)
-  const totalConfidence = Math.min(100,
-    signals.reduce((sum, s) => sum + s.confidence, 0)
-  );
-
-  // Drift threshold
-  const isDrift = totalConfidence >= DRIFT_DETECTION.CONFIDENCE_THRESHOLD;
-
-  return { isDrift, signals, totalConfidence };
-}
-
-/**
- * Convert drift analysis to attack analysis format
- */
-export function driftToAttackAnalysis(drift: DriftAnalysis): AttackAnalysis {
-  if (!drift.isDrift) {
-    return { detected: false, type: null, confidence: 0, details: '' };
+  // Correspondences referencing atom IDs that no longer exist
+  const orphanedRefRow = await db.prepare(
+    `SELECT COUNT(*) as count FROM correspondences c
+     WHERE NOT EXISTS (SELECT 1 FROM atoms WHERE id = c.atom_a_id)
+        OR NOT EXISTS (SELECT 1 FROM atoms WHERE id = c.atom_b_id)`
+  ).first<{ count: number }>()
+  const orphanedRefs = orphanedRefRow?.count ?? 0
+  if (orphanedRefs > 0) {
+    issues.push({
+      type: 'orphaned_ref',
+      description: `${orphanedRefs} correspondence rows reference atom IDs not in atoms table`,
+      severity: 'high',
+    })
   }
 
-  return {
-    detected: true,
-    type: 'drift_attack',
-    confidence: drift.totalConfidence,
-    details: drift.signals.map(s => `${s.type}: ${s.details}`).join('; '),
-  };
-}
+  // Categories with zero atoms assigned (informational)
+  const emptyCatResult = await db.prepare(
+    `SELECT slug FROM categories
+     WHERE slug NOT IN (SELECT DISTINCT category_slug FROM atoms WHERE category_slug IS NOT NULL)`
+  ).all<{ slug: string }>()
+  for (const row of emptyCatResult.results ?? []) {
+    issues.push({
+      type: 'coverage_gap',
+      description: `category '${row.slug}' has no atoms assigned`,
+      severity: 'low',
+    })
+  }
 
-/**
- * Check for emoji signature consistency across multiple comments
- * Used to detect bot patterns
- */
-export async function checkEmojiSignaturePattern(
-  db: D1Database,
-  authorHash: string,
-  emojiSignature: string,
-  hoursBack: number = 24
-): Promise<number> {
-  const cutoffTime = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
-
-  const result = await db
-    .prepare(
-      `SELECT COUNT(*) as count
-       FROM author_signals
-       WHERE author_hash = ?
-       AND emoji_signature = ?
-       AND timestamp >= ?`
-    )
-    .bind(authorHash, emojiSignature, cutoffTime)
-    .first<{ count: number }>();
-
-  return result?.count ?? 0;
-}
-
-/**
- * Determine if an emoji signature indicates a bot
- * Requires 3+ occurrences of the same emoji signature
- */
-export function isBotSignature(emojiCount: number): boolean {
-  return emojiCount >= DRIFT_DETECTION.EMOJI_REPEAT_THRESHOLD;
+  return issues
 }

@@ -1,24 +1,21 @@
 {
-  "name": "hobbot-worker",
+  "name": "hobbot-grimoire",
   "version": "1.0.0",
-  "description": "H0BBOT - AI agent for Moltbook with dual-layer security",
+  "description": "Grimoire custodian worker for HobFarm",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "vitest"
+    "types": "wrangler types"
   },
-  "keywords": [
-    "cloudflare",
-    "workers",
-    "ai",
-    "moltbook"
-  ],
-  "author": "",
-  "license": "MIT",
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240129.0",
     "typescript": "^5.3.3",
     "wrangler": "^4.61.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "agents": "^0.6.0",
+    "zod": "^4.3.6"
   }
 }

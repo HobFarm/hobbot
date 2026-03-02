@@ -1,64 +1,32 @@
-// Decision provenance — structured reasoning chain for every pipeline decision
-// Compact keys keep the JSON blob small in seen_posts.decision_log
+// Decision trace logging: full provenance for validation decisions
+
+import { logValidationEvent } from '../state/audit'
+import type { ValidationResult } from '../grimoire/types'
+import type { AuditTrigger } from '../state/audit'
 
 export interface DecisionTrace {
-  // Context (always set)
-  ts: string;                     // ISO timestamp
-  src: string;                    // discovery source: feed/rising/search
-  sub: string;                    // submolt name
-  age_m: number;                  // post age in minutes at discovery
-  cmts: number;                   // comment count at discovery
-
-  // Gate (set if processing stopped at a pre-scoring gate)
-  gate?: string;                  // no_author|own_post|whitelisted|agent_instr|empty|parse_fail|content_unclear
-  gate_detail?: string;           // extra context (e.g. whitelisted username, attack details)
-
-  // Sanitizer output (set if Layer 1 ran)
-  san?: {
-    threat: number;               // 0-3
-    shape?: string;               // structural shape classification
-    shape_conf?: number;          // confidence %
-    intent?: string;              // question|statement|creative|meta|unknown
-    sigs: string[];               // engagement signals that fired
-  };
-
-  // Attack detection (set if patterns found)
-  atk?: {
-    n: number;                    // count of patterns detected
-    types: string[];              // attack types
-    primary?: string;             // primary attack type
-    conf?: number;                // primary confidence %
-    escalated?: boolean;          // threat level upgraded by pattern detection
-  };
-
-  // Engagement outcome (set for scored posts)
-  out?: {
-    action: string;               // engage|skip|catalog|deflect|upvote_only|silent
-    reason: string;               // human-readable why
-    tier?: string;                // engagement tier
-    family?: string;              // metaphor family selected
-    family_trigger?: string;      // keyword/signal that triggered family selection
-    monster_type?: string;         // classified monster type (if any)
-    archetype_dominant?: string;   // dominant archetype voice used
-    validated?: boolean;          // response passed all validation gates
-    val_fail?: string;            // validation failure reason (if rejected)
-    upvoted?: boolean;
-    profile_fetched?: boolean;
-    has_anchor?: boolean;         // concrete anchor presence in original posts
-  };
+  atom_id: string | null
+  trigger: AuditTrigger
+  checks_run: string[]
+  result: 'pass' | 'warn' | 'fail'
+  validation: ValidationResult
+  duration_ms: number
 }
 
-/** Create initial trace from discovery context */
-export function startTrace(
-  post: { submolt: string; created_at: string; comment_count: number },
-  source: string
-): DecisionTrace {
-  const ageMs = Date.now() - new Date(post.created_at).getTime();
-  return {
-    ts: new Date().toISOString(),
-    src: source,
-    sub: post.submolt,
-    age_m: Math.round(ageMs / 60000),
-    cmts: post.comment_count,
-  };
+export async function traceDecision(db: D1Database, trace: DecisionTrace): Promise<void> {
+  const details = {
+    checks_run: trace.checks_run,
+    errors: trace.validation.errors,
+    warnings: trace.validation.warnings,
+    duration_ms: trace.duration_ms,
+  }
+
+  await logValidationEvent(db, trace.trigger, trace.atom_id, trace.result, details)
+  console.log(`decision_trace: atom=${trace.atom_id ?? 'new'} result=${trace.result} checks=${trace.checks_run.length} ms=${trace.duration_ms}`)
+}
+
+export function mapValidationToResult(v: ValidationResult): 'pass' | 'warn' | 'fail' {
+  if (!v.valid) return 'fail'
+  if (v.warnings.length > 0) return 'warn'
+  return 'pass'
 }

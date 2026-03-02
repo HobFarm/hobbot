@@ -1,1 +1,0 @@
-ALTER TABLE agent_relationships ADD COLUMN last_checked_at TEXT;
