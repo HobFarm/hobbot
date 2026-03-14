@@ -12,7 +12,12 @@ export async function validateServiceToken(request: Request, env: Env): Promise<
     return { valid: false, agent: null }
   }
 
-  const token = authHeader.slice(7).trim()
+  const bearerValue = authHeader.slice(7).trim()
+
+  // Parse incoming token: "agent:secret" or bare "secret"
+  const incomingColonIdx = bearerValue.indexOf(':')
+  const incomingAgent = incomingColonIdx >= 1 ? bearerValue.slice(0, incomingColonIdx).trim() : null
+  const incomingSecret = incomingColonIdx >= 1 ? bearerValue.slice(incomingColonIdx + 1).trim() : bearerValue
 
   // Secrets Store bindings may be Fetcher objects (.get()) or plain strings
   let tokenList: string
@@ -32,13 +37,15 @@ export async function validateServiceToken(request: Request, env: Env): Promise<
       // "agent:token" format
       const agent = trimmed.slice(0, colonIdx).trim()
       const secret = trimmed.slice(colonIdx + 1).trim()
-      if (secret === token && agent.length > 0) {
+      if (secret === incomingSecret && agent.length > 0) {
+        // If caller specified an agent prefix, it must match
+        if (incomingAgent && incomingAgent !== agent) continue
         return { valid: true, agent }
       }
     } else {
       // Bare token (no agent prefix)
-      if (trimmed === token) {
-        return { valid: true, agent: 'default' }
+      if (trimmed === incomingSecret) {
+        return { valid: true, agent: incomingAgent ?? 'default' }
       }
     }
   }
