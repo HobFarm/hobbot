@@ -87,7 +87,7 @@ export async function resolveDiscovery(
     const ingestResult = await ingestAtom(db, {
       text: entry.term,
       collection_slug: resolution.collection_slug,
-      category_slug: resolution.category_slug ?? entry.suggested_category ?? undefined,
+      category_slug: resolution.category_slug !== undefined ? resolution.category_slug : (entry.suggested_category ?? undefined),
       observation: resolution.observation ?? 'observation',
       confidence: resolution.confidence ?? 0.7,
       harmonics: resolution.harmonics ?? {},

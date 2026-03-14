@@ -1,13 +1,11 @@
 // MCP server factory: exposes GrimoireHandle methods as MCP tools
 // New McpServer instance per request (SDK 1.26.0 security requirement)
+// Phase 3: ingest/image/batch tools delegate to hobbot-pipeline via RPC
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { createGrimoireHandle } from '../grimoire/handle'
 import { ingestAtom } from '../grimoire/ingest'
-import { ingestKnowledge } from '../services/knowledge-ingest'
-import { analyzeImage } from '../services/image-analysis'
-import { checkCategoryExists } from '../state/grimoire'
 import type { Env } from '../index'
 
 export function createGrimoireMcpServer(env: Env): McpServer {
@@ -194,7 +192,8 @@ export function createGrimoireMcpServer(env: Env): McpServer {
     },
     async ({ url, source_type, collection_slug, dry_run }) => {
       try {
-        const result = await ingestKnowledge(env, { url, source_type, collection_slug, dry_run })
+        const pipeline = (env as any).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromUrl({ url, source_type, collection_slug, dry_run })
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
       } catch (err) {
         return {
@@ -524,7 +523,8 @@ export function createGrimoireMcpServer(env: Env): McpServer {
         }
       }
       try {
-        const analysis = await analyzeImage(env, { image_base64, image_url, r2_key, mime_type })
+        const pipeline = (env as any).HOBBOT_PIPELINE as any
+        const analysis = await pipeline.classifyImage({ image_base64, image_url, r2_key, mime_type })
         return { content: [{ type: 'text' as const, text: JSON.stringify(analysis, null, 2) }] }
       } catch (err) {
         return {
@@ -557,118 +557,117 @@ export function createGrimoireMcpServer(env: Env): McpServer {
       }
 
       try {
-        // 1. Analyze image via Gemini Vision
-        const analysis = await analyzeImage(env, { image_base64, image_url, r2_key, mime_type })
-
-        // 2. Collect all extracted atoms
-        const allAtoms = [
-          ...analysis.visual_atoms,
-          ...analysis.color_atoms,
-          ...analysis.material_atoms,
-          ...analysis.atmospheric_atoms,
-        ]
-
-        const atomsCreated: { id: string; text: string }[] = []
-        const atomsSkipped: string[] = []
-        const sourceId = crypto.randomUUID()
-
-        if (!dry_run) {
-          // 3. Create source record
-          await handle.sourceAdd({
-            id: sourceId,
-            type,
-            filename: filename ?? null,
-            mime_type: mime_type ?? null,
-            r2_key: r2_key ?? null,
-            source_url: image_url ?? null,
-            metadata: analysis as unknown as Record<string, unknown>,
-            aesthetic_tags: analysis.aesthetic_tags,
-            arrangement_matches: analysis.arrangement_matches,
-            harmonic_profile: analysis.harmonic_profile as unknown as Record<string, string>,
-            atom_count: 0,
-            created_at: new Date().toISOString(),
-          })
-
-          // 4. Insert atoms and create junction records
-          for (const extracted of allAtoms) {
-            const text = extracted.text?.trim()
-            if (!text || text.length < 2) continue
-
-            // Dedup: lookup searches by text_lower
-            const existing = await handle.lookup(text)
-            if (existing) {
-              atomsSkipped.push(text)
-              // Still link existing atom to this source
-              await handle.sourceAtomLink(sourceId, existing.id, 1.0, 'gemini_vision')
-              continue
-            }
-
-            // Validate category_hint against categories table
-            let categorySlug: string | undefined
-            if (extracted.category_hint) {
-              const hintValid = await checkCategoryExists(env.GRIMOIRE_DB, extracted.category_hint)
-              if (hintValid) {
-                categorySlug = extracted.category_hint
-              }
-            }
-
-            const result = await ingestAtom(env.GRIMOIRE_DB, {
-              text,
-              collection_slug: collection_slug,
-              category_slug: categorySlug ?? null,
-              source: 'ai',
-              source_app: 'image-ingest',
-              confidence: 0.6,
-              observation: 'observation',
-              metadata: { source_image: sourceId },
-            })
-
-            if (result.atom) {
-              atomsCreated.push({ id: result.atom.id, text: result.atom.text })
-              await handle.sourceAtomLink(sourceId, result.atom.id, 1.0, 'gemini_vision')
-            } else {
-              atomsSkipped.push(text)
-            }
-          }
-
-          // 5. Update atom count on source
-          const totalLinked = atomsCreated.length + atomsSkipped.length
-          await handle.sourceUpdateAtomCount(sourceId, totalLinked)
-        } else {
-          // Dry run: check what would be created vs skipped
-          for (const extracted of allAtoms) {
-            const text = extracted.text?.trim()
-            if (!text || text.length < 2) continue
-            const existing = await handle.lookup(text)
-            if (existing) {
-              atomsSkipped.push(text)
-            } else {
-              atomsCreated.push({ id: '(dry_run)', text })
-            }
-          }
-        }
-
-        const response = {
-          source_id: dry_run ? '(dry_run)' : sourceId,
-          type,
-          analysis: {
-            image_type: analysis.image_type,
-            description: analysis.description,
-            aesthetic_tags: analysis.aesthetic_tags,
-            arrangement_matches: analysis.arrangement_matches,
-            harmonic_profile: analysis.harmonic_profile,
-            dominant_colors: analysis.dominant_colors,
-          },
-          atoms_created: atomsCreated,
-          atoms_skipped: atomsSkipped,
-          total_extracted: allAtoms.length,
-          dry_run,
-        }
-
-        return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] }
+        const pipeline = (env as any).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromImage({
+          image_base64, image_url, r2_key, mime_type, filename: filename ?? 'image', collection_slug, dry_run,
+        })
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
       } catch (err) {
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({ error: 'ingest_failed', message: (err as Error).message }) }],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // --- PDF ingest (Workers AI markdown extraction) ---
+
+  server.tool(
+    'grimoire_ingest_pdf',
+    'Ingest a PDF document into the Grimoire knowledge graph. Extracts text via AI markdown conversion, chunks by heading structure, filters bibliography/index pages, then runs full pipeline (extract, match, index, relate, vectorize). Supports URL, R2 key, or base64 input.',
+    {
+      url: z.string().optional().describe('URL to a PDF file (e.g. archive.org download link)'),
+      r2_key: z.string().optional().describe('R2 object key for an already-uploaded PDF'),
+      pdf_base64: z.string().optional().describe('Base64-encoded PDF content'),
+      filename: z.string().optional().describe('Original filename'),
+      title: z.string().optional().describe('Override extracted title'),
+      source_type: z.enum(['aesthetic', 'domain']).default('domain').describe('Content type'),
+      collection_slug: z.string().default('uncategorized').describe('Collection for extracted atoms'),
+      tags: z.array(z.string()).optional().describe('Tags for the document'),
+      arrangement_hints: z.array(z.string()).optional().describe('Arrangement slugs to hint the tagger (e.g. bauhaus, constructivism)'),
+      dry_run: z.boolean().default(false).describe('Preview extraction without creating records'),
+    },
+    async ({ url, r2_key, pdf_base64, filename, title, source_type, collection_slug, tags, arrangement_hints, dry_run }) => {
+      if (!url && !r2_key && !pdf_base64) {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'missing_input', message: 'One of url, r2_key, or pdf_base64 is required' }) }],
+          isError: true,
+        }
+      }
+
+      try {
+        const pipeline = (env as any).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromPdf({
+          url, r2_key, pdf_base64, filename, title, source_type, collection_slug, tags, arrangement_hints, dry_run,
+        })
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'pdf_ingest_failed', message: (err as Error).message }) }],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // --- Text ingest (no URL fetch, direct content) ---
+
+  server.tool(
+    'grimoire_ingest_text',
+    'Ingest raw text content into the Grimoire knowledge graph. Creates source, document, chunks, atoms, and graph edges in one operation. Use for chat excerpts, notes, or pasted content.',
+    {
+      title: z.string().describe('Title for the document'),
+      content: z.string().describe('Raw text content to ingest'),
+      source_type: z.enum(['aesthetic', 'domain']).default('domain').describe('Content type'),
+      collection_slug: z.string().default('uncategorized').describe('Collection for extracted atoms'),
+      tags: z.array(z.string()).optional().describe('Tags for the document (merged with source_type)'),
+      source_url: z.string().optional().describe('Attribution URL (optional)'),
+      dry_run: z.boolean().default(false).describe('Preview without creating records'),
+    },
+    async ({ title, content, source_type, collection_slug, tags, source_url, dry_run }) => {
+      try {
+        const pipeline = (env as any).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromText({
+          title, content, source_type, collection_slug, tags, dry_run,
+        })
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'text_ingest_failed', message: (err as Error).message }) }],
+          isError: true,
+        }
+      }
+    },
+  )
+
+  // --- Batch URL ingest ---
+
+  server.tool(
+    'grimoire_ingest_batch',
+    'Ingest multiple URLs into the Grimoire knowledge graph sequentially. Each URL goes through the full 7-step pipeline. Max 10 URLs per batch.',
+    {
+      urls: z.array(z.object({
+        url: z.string().describe('URL to ingest'),
+        source_type: z.enum(['aesthetic', 'domain']).default('domain').describe('Content type for this URL'),
+      })).max(10).describe('URLs to ingest (max 10)'),
+      collection_slug: z.string().default('uncategorized').describe('Collection for extracted atoms'),
+      dry_run: z.boolean().default(false).describe('Preview without creating records'),
+    },
+    async ({ urls, collection_slug, dry_run }) => {
+      try {
+        const pipeline = (env as any).HOBBOT_PIPELINE as any
+        const results = await pipeline.ingestBatch({ urls, collection_slug, dry_run })
+        const summary = {
+          total: urls.length,
+          succeeded: results.filter((r: any) => !r.errors?.length).length,
+          failed: results.filter((r: any) => r.errors?.length > 0).length,
+          results,
+        }
+        return { content: [{ type: 'text' as const, text: JSON.stringify(summary, null, 2) }] }
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'batch_ingest_failed', message: (err as Error).message }) }],
           isError: true,
         }
       }

@@ -199,13 +199,13 @@ export async function insertAtom(db: D1Database, atom: GrimoireAtom): Promise<vo
   await db.prepare(
     `INSERT INTO atoms (id, text, text_lower, collection_slug, category_slug, observation, status,
      confidence, encounter_count, tags, source, source_app, metadata, harmonics, modality,
-     embedding_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     utility, embedding_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     row.id, row.text, row.text_lower, row.collection_slug, row.category_slug ?? null,
     row.observation, row.status, row.confidence, row.encounter_count ?? 1,
     row.tags, row.source, row.source_app ?? null, row.metadata, row.harmonics,
-    row.modality, row.embedding_status ?? 'pending',
+    row.modality, (row as any).utility ?? 'visual', row.embedding_status ?? 'pending',
     row.created_at, row.updated_at
   ).run()
 }

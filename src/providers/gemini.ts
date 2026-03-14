@@ -47,15 +47,15 @@ export class GeminiProvider implements AIProvider {
   // Pricing per 1M tokens by model family
   private static readonly PRICING: Record<string, { input: number; output: number }> = {
     'gemini-2.5-flash': { input: 0.075, output: 0.30 },
-    'gemini-3-flash-preview': { input: 0.15, output: 0.60 },
-    'gemini-3-pro-preview': { input: 2.00, output: 8.00 },
+    'gemini-3.1-flash-preview': { input: 0.15, output: 0.60 },
+    'gemini-3.1-pro-preview': { input: 2.00, output: 8.00 },
   };
   private static readonly DEFAULT_PRICING = { input: 0.15, output: 0.60 };
 
   // Sub-Cortex: fallback models for unstable preview endpoints
   private static readonly FALLBACK_MODELS: Record<string, string> = {
-    'gemini-3-pro-preview': 'gemini-2.5-flash',
-    'gemini-3-flash-preview': 'gemini-2.5-flash',
+    'gemini-3.1-pro-preview': 'gemini-2.5-flash',
+    'gemini-3.1-flash-preview': 'gemini-2.5-flash',
   };
 
   // Moderation agent needs to see hostile content to classify it.

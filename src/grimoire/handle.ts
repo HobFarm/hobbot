@@ -14,7 +14,7 @@ import {
 } from '../state/graph'
 import {
   insertDocument, updateDocumentStatus, getDocument,
-  listDocuments, insertChunk, searchChunks, getDocumentCounts,
+  listDocuments, insertChunk, searchChunks, getDocumentCounts, updateChunk,
 } from '../state/documents'
 import {
   submitDiscovery, listDiscoveries, resolveDiscovery,
@@ -29,6 +29,7 @@ import {
 } from '../state/ingest-log'
 import {
   insertSource, getSource, insertSourceAtom, updateSourceAtomCount,
+  updateSourceStatus, updateSourceExtraction, insertSourceAtomWithContext,
 } from '../state/sources'
 import { validateAtom } from '../pipeline/validate'
 import { QUERY } from '../config'
@@ -164,7 +165,7 @@ export function createGrimoireHandle(db: D1Database): GrimoireHandle {
 
     // ---------- Knowledge Layer: Documents ----------
 
-    async documentAdd(doc: Omit<Document, 'created_at' | 'updated_at'>): Promise<Document> {
+    async documentAdd(doc: Omit<Document, 'created_at' | 'updated_at'> & { source_id?: string | null }): Promise<Document> {
       await insertDocument(db, doc)
       const result = await getDocument(db, doc.id)
       return result!.document
@@ -189,6 +190,10 @@ export function createGrimoireHandle(db: D1Database): GrimoireHandle {
 
     async documentChunkSearch(query: string, opts?: { category?: string; arrangement?: string; document_id?: string; limit?: number }): Promise<ChunkSearchResult[]> {
       return searchChunks(db, query, opts)
+    },
+
+    async documentChunkUpdate(chunkId: string, updates: { summary?: string; category_slug?: string; arrangement_slugs?: string[]; quality_score?: number }): Promise<void> {
+      return updateChunk(db, chunkId, updates)
     },
 
     // ---------- Knowledge Layer: Discovery Queue ----------
@@ -237,12 +242,17 @@ export function createGrimoireHandle(db: D1Database): GrimoireHandle {
 
     async ingestLogUpdate(id: string, updates: {
       status?: IngestLogStatus
+      url?: string
       atoms_created?: number
       atoms_skipped?: number
       relations_created?: number
       extraction_json?: Record<string, unknown>
       error_message?: string
       completed_at?: string
+      source_id?: string
+      document_id?: string
+      chunks_created?: number
+      step_status?: Record<string, string>
     }): Promise<void> {
       await updateIngestLog(db, id, updates)
     },
@@ -267,6 +277,30 @@ export function createGrimoireHandle(db: D1Database): GrimoireHandle {
 
     async sourceUpdateAtomCount(id: string, count: number): Promise<void> {
       return updateSourceAtomCount(db, id, count)
+    },
+
+    async sourceUpdateStatus(id: string, status: string): Promise<void> {
+      return updateSourceStatus(db, id, status)
+    },
+
+    async sourceUpdateExtraction(id: string, info: {
+      extraction_model?: string
+      extraction_prompt_version?: string
+      harmonic_profile?: Record<string, string>
+      arrangement_matches?: { slug: string; confidence: number; reasoning?: string }[]
+      aesthetic_tags?: string[]
+      atom_count?: number
+      status?: string
+      document_id?: string
+    }): Promise<void> {
+      return updateSourceExtraction(db, id, info)
+    },
+
+    async sourceAtomLinkWithContext(
+      sourceId: string, atomId: string, confidence: number, method: string,
+      extractionContext: string | null, chunkId: string | null
+    ): Promise<void> {
+      return insertSourceAtomWithContext(db, sourceId, atomId, confidence, method, extractionContext, chunkId)
     },
   }
 }

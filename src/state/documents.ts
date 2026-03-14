@@ -14,17 +14,17 @@ import {
 
 export async function insertDocument(
   db: D1Database,
-  doc: Omit<Document, 'created_at' | 'updated_at'>
+  doc: Omit<Document, 'created_at' | 'updated_at'> & { source_id?: string | null }
 ): Promise<void> {
   await db.prepare(
     `INSERT INTO documents (id, title, description, mime_type, r2_key, source_url, tags,
-     token_count, chunk_count, status, source_app, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+     token_count, chunk_count, status, source_app, source_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
   ).bind(
     doc.id, doc.title, doc.description ?? null, doc.mime_type,
     doc.r2_key ?? null, doc.source_url ?? null, JSON.stringify(doc.tags ?? []),
     doc.token_count ?? null, doc.chunk_count ?? 0, doc.status,
-    doc.source_app ?? null
+    doc.source_app ?? null, doc.source_id ?? null
   ).run()
 }
 
@@ -100,6 +100,24 @@ export async function insertChunk(
     JSON.stringify(chunk.arrangement_slugs ?? []),
     JSON.stringify(chunk.metadata ?? {})
   ).run()
+
+  // Dual-write: arrangement_chunks + arrangement_documents join tables
+  const slugs = (chunk.arrangement_slugs ?? []).filter(s => s !== 'unaffiliated')
+  if (slugs.length > 0) {
+    try {
+      const stmts = slugs.flatMap(slug => [
+        db.prepare(
+          'INSERT OR IGNORE INTO arrangement_chunks (arrangement_slug, chunk_id) VALUES (?, ?)'
+        ).bind(slug, chunk.id),
+        db.prepare(
+          'INSERT OR IGNORE INTO arrangement_documents (arrangement_slug, document_id) VALUES (?, ?)'
+        ).bind(slug, chunk.document_id),
+      ])
+      await db.batch(stmts)
+    } catch (e) {
+      console.warn(`[documents] arrangement_chunks dual-write failed for chunk ${chunk.id}: ${e instanceof Error ? e.message : e}`)
+    }
+  }
 }
 
 export async function searchChunks(
@@ -110,15 +128,20 @@ export async function searchChunks(
   const limit = Math.min(opts.limit ?? QUERY.DEFAULT_SEARCH_LIMIT, QUERY.MAX_SEARCH_LIMIT)
   const parts: string[] = ["c.content LIKE '%' || ? || '%'"]
   const binds: unknown[] = [query.toLowerCase()]
+  const joins: string[] = ['JOIN documents d ON c.document_id = d.id']
 
   if (opts.category) { parts.push('c.category_slug = ?'); binds.push(opts.category) }
-  if (opts.arrangement) { parts.push("c.arrangement_slugs LIKE '%' || ? || '%'"); binds.push(opts.arrangement) }
+  if (opts.arrangement) {
+    joins.push('JOIN arrangement_chunks ac ON ac.chunk_id = c.id')
+    parts.push('ac.arrangement_slug = ?')
+    binds.push(opts.arrangement)
+  }
   if (opts.document_id) { parts.push('c.document_id = ?'); binds.push(opts.document_id) }
 
   binds.push(limit)
   const sql = `SELECT c.*, d.title as document_title
     FROM document_chunks c
-    JOIN documents d ON c.document_id = d.id
+    ${joins.join('\n    ')}
     WHERE ${parts.join(' AND ')}
     ORDER BY c.chunk_index ASC
     LIMIT ?`
@@ -128,6 +151,83 @@ export async function searchChunks(
     ...fromChunkRow(row),
     document_title: row.document_title,
   }))
+}
+
+// ---------- Chunk Updates (for enrichment) ----------
+
+export async function updateChunk(
+  db: D1Database,
+  chunkId: string,
+  updates: { summary?: string; category_slug?: string; arrangement_slugs?: string[]; quality_score?: number }
+): Promise<void> {
+  const sets: string[] = []
+  const binds: unknown[] = []
+
+  if (updates.summary !== undefined) { sets.push('summary = ?'); binds.push(updates.summary) }
+  if (updates.category_slug !== undefined) { sets.push('category_slug = ?'); binds.push(updates.category_slug) }
+  if (updates.arrangement_slugs !== undefined) { sets.push('arrangement_slugs = ?'); binds.push(JSON.stringify(updates.arrangement_slugs)) }
+  if (updates.quality_score !== undefined) { sets.push('quality_score = ?'); binds.push(updates.quality_score) }
+
+  if (sets.length === 0) return
+
+  binds.push(chunkId)
+  await db.prepare(
+    `UPDATE document_chunks SET ${sets.join(', ')} WHERE id = ?`
+  ).bind(...binds).run()
+
+  // Dual-write: update arrangement_chunks join table when slugs change
+  if (updates.arrangement_slugs !== undefined) {
+    try {
+      const slugs = updates.arrangement_slugs.filter(s => s !== 'unaffiliated')
+      const stmts: D1PreparedStatement[] = [
+        db.prepare('DELETE FROM arrangement_chunks WHERE chunk_id = ?').bind(chunkId),
+      ]
+      // Look up document_id for arrangement_documents
+      const row = await db.prepare('SELECT document_id FROM document_chunks WHERE id = ?').bind(chunkId).first<{ document_id: string }>()
+      for (const slug of slugs) {
+        stmts.push(
+          db.prepare('INSERT OR IGNORE INTO arrangement_chunks (arrangement_slug, chunk_id) VALUES (?, ?)').bind(slug, chunkId)
+        )
+        if (row?.document_id) {
+          stmts.push(
+            db.prepare('INSERT OR IGNORE INTO arrangement_documents (arrangement_slug, document_id) VALUES (?, ?)').bind(slug, row.document_id)
+          )
+        }
+      }
+      await db.batch(stmts)
+    } catch (e) {
+      console.warn(`[documents] arrangement_chunks dual-write (update) failed for chunk ${chunkId}: ${e instanceof Error ? e.message : e}`)
+    }
+  }
+}
+
+// ---------- Unenriched chunk query (for cron enrichment) ----------
+
+export async function getUnenrichedChunks(
+  db: D1Database,
+  limit: number = 10
+): Promise<{ chunk_id: string; document_id: string; content: string; document_title: string; category_slug: string | null }[]> {
+  const result = await db.prepare(`
+    SELECT c.id as chunk_id, c.document_id, c.content, d.title as document_title, c.category_slug
+    FROM document_chunks c
+    JOIN documents d ON c.document_id = d.id
+    WHERE c.summary IS NULL AND d.status IN ('chunked', 'enriched')
+    ORDER BY d.created_at ASC, c.chunk_index ASC
+    LIMIT ?
+  `).bind(limit).all<{ chunk_id: string; document_id: string; content: string; document_title: string; category_slug: string | null }>()
+  return result.results ?? []
+}
+
+// ---------- Check if all chunks for a document are enriched ----------
+
+export async function areAllChunksEnriched(
+  db: D1Database,
+  documentId: string
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT COUNT(*) as unenriched FROM document_chunks WHERE document_id = ? AND summary IS NULL`
+  ).bind(documentId).first<{ unenriched: number }>()
+  return (row?.unenriched ?? 1) === 0
 }
 
 // ---------- Counts (for stats) ----------

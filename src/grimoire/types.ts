@@ -1,5 +1,10 @@
 // Core type definitions for the Grimoire custodian
 
+export interface ArrangementTag {
+  slug: string
+  dist: number
+}
+
 export interface GrimoireAtom {
   id: string
   text: string
@@ -16,17 +21,20 @@ export interface GrimoireAtom {
   metadata: Record<string, unknown>
   harmonics: Record<string, unknown>
   modality: 'visual' | 'both'
+  utility?: string // 'visual' | 'literary' | 'dual'
   embedding_status: 'pending' | 'processing' | 'complete' | 'failed'
   register: number | null
+  arrangement_tags: ArrangementTag[]
   created_at: string
   updated_at: string
 }
 
 // D1 row shape: JSON fields stored as TEXT
-export interface AtomRow extends Omit<GrimoireAtom, 'tags' | 'metadata' | 'harmonics'> {
+export interface AtomRow extends Omit<GrimoireAtom, 'tags' | 'metadata' | 'harmonics' | 'arrangement_tags'> {
   tags: string
   metadata: string
   harmonics: string
+  arrangement_tags: string
 }
 
 export function safeJson<T>(val: string | null | undefined, fallback: T): T {
@@ -40,6 +48,7 @@ export function fromRow(row: AtomRow): GrimoireAtom {
     tags: safeJson(row.tags, []),
     metadata: safeJson(row.metadata, {}),
     harmonics: safeJson(row.harmonics, {}),
+    arrangement_tags: safeJson(row.arrangement_tags, []),
   }
 }
 
@@ -48,6 +57,7 @@ export function toRow(atom: Partial<GrimoireAtom>): Partial<AtomRow> {
   if (atom.tags !== undefined) row.tags = JSON.stringify(atom.tags)
   if (atom.metadata !== undefined) row.metadata = JSON.stringify(atom.metadata)
   if (atom.harmonics !== undefined) row.harmonics = JSON.stringify(atom.harmonics)
+  if (atom.arrangement_tags !== undefined) row.arrangement_tags = JSON.stringify(atom.arrangement_tags)
   return row as Partial<AtomRow>
 }
 
@@ -241,12 +251,13 @@ export interface GrimoireHandle {
   stats(): Promise<GrimoireStats>
 
   // Knowledge Layer: Documents
-  documentAdd(doc: Omit<Document, 'created_at' | 'updated_at'>): Promise<Document>
+  documentAdd(doc: Omit<Document, 'created_at' | 'updated_at'> & { source_id?: string | null }): Promise<Document>
   documentGet(id: string): Promise<{ document: Document; chunks: DocumentChunk[] } | null>
   documentsList(opts?: { status?: string; mime_type?: string; source_app?: string; limit?: number }): Promise<Document[]>
   documentUpdateStatus(id: string, status: Document['status'], chunk_count?: number): Promise<void>
   documentChunkAdd(chunk: Omit<DocumentChunk, 'created_at'>): Promise<DocumentChunk>
   documentChunkSearch(query: string, opts?: { category?: string; arrangement?: string; document_id?: string; limit?: number }): Promise<ChunkSearchResult[]>
+  documentChunkUpdate(chunkId: string, updates: { summary?: string; category_slug?: string; arrangement_slugs?: string[]; quality_score?: number }): Promise<void>
 
   // Knowledge Layer: Discovery Queue
   discoverySubmit(entry: Omit<DiscoveryEntry, 'status' | 'resolved_atom_id' | 'duplicate_of_atom_id' | 'resolution_note' | 'resolved_at' | 'created_at'>): Promise<DiscoveryEntry>
@@ -266,12 +277,17 @@ export interface GrimoireHandle {
   ingestLogByUrl(url: string): Promise<IngestLog | null>
   ingestLogUpdate(id: string, updates: {
     status?: IngestLogStatus
+    url?: string
     atoms_created?: number
     atoms_skipped?: number
     relations_created?: number
     extraction_json?: Record<string, unknown>
     error_message?: string
     completed_at?: string
+    source_id?: string
+    document_id?: string
+    chunks_created?: number
+    step_status?: Record<string, string>
   }): Promise<void>
   ingestLogList(opts?: { status?: string; source_type?: string; limit?: number }): Promise<IngestLog[]>
 
@@ -280,6 +296,21 @@ export interface GrimoireHandle {
   sourceGet(id: string): Promise<SourceRecord | null>
   sourceAtomLink(sourceId: string, atomId: string, confidence: number, method: string): Promise<void>
   sourceUpdateAtomCount(id: string, count: number): Promise<void>
+  sourceUpdateStatus(id: string, status: string): Promise<void>
+  sourceUpdateExtraction(id: string, info: {
+    extraction_model?: string
+    extraction_prompt_version?: string
+    harmonic_profile?: Record<string, string>
+    arrangement_matches?: { slug: string; confidence: number; reasoning?: string }[]
+    aesthetic_tags?: string[]
+    atom_count?: number
+    status?: string
+    document_id?: string
+  }): Promise<void>
+  sourceAtomLinkWithContext(
+    sourceId: string, atomId: string, confidence: number, method: string,
+    extractionContext: string | null, chunkId: string | null
+  ): Promise<void>
 }
 
 export interface UsageLogEntry {
@@ -330,7 +361,7 @@ export interface Document {
   tags: string[]
   token_count: number | null
   chunk_count: number
-  status: 'pending' | 'chunking' | 'chunked' | 'failed'
+  status: 'pending' | 'chunking' | 'chunked' | 'enriched' | 'failed'
   source_app: string | null
   created_at: string
   updated_at: string
@@ -410,7 +441,7 @@ export interface ResolveOptions {
   note?: string
   // For accept: atom creation fields
   collection_slug?: string
-  category_slug?: string
+  category_slug?: string | null
   observation?: 'observation' | 'interpretation'
   harmonics?: Record<string, unknown>
   confidence?: number
@@ -426,8 +457,8 @@ export interface ResolveResult {
 
 // ---------- Knowledge Layer: Atom Relations ----------
 
-export type AtomRelationType = 'compositional' | 'oppositional' | 'hierarchical' | 'modifies' | 'co_occurs' | 'derives_from'
-export type AtomRelationSource = 'curated' | 'discovered' | 'inferred' | 'observed'
+export type AtomRelationType = 'compositional' | 'oppositional' | 'hierarchical' | 'modifies' | 'co_occurs' | 'derives_from' | 'narrower_than' | 'influenced_by'
+export type AtomRelationSource = 'curated' | 'discovered' | 'inferred' | 'observed' | 'harvested'
 
 export interface AtomRelation {
   id: string
@@ -498,7 +529,7 @@ export interface ProviderBehaviorQuery {
 // ---------- Knowledge Ingest Pipeline ----------
 
 export type IngestSourceType = 'aesthetic' | 'domain'
-export type IngestLogStatus = 'pending' | 'processing' | 'complete' | 'failed'
+export type IngestLogStatus = 'pending' | 'processing' | 'complete' | 'partial' | 'failed'
 
 export interface IngestLog {
   id: string
@@ -513,11 +544,21 @@ export interface IngestLog {
   dry_run: boolean
   created_at: string
   completed_at: string | null
+  // Knowledge layer rebuild columns (migration 007)
+  source_id?: string | null
+  document_id?: string | null
+  chunks_created?: number
+  // Step-level status tracking (migration 0005)
+  step_status?: Record<string, string> | null
 }
 
-export interface IngestLogRow extends Omit<IngestLog, 'extraction_json' | 'dry_run'> {
+export interface IngestLogRow extends Omit<IngestLog, 'extraction_json' | 'dry_run' | 'source_id' | 'document_id' | 'chunks_created' | 'step_status'> {
   extraction_json: string | null
   dry_run: number
+  source_id: string | null
+  document_id: string | null
+  chunks_created: number | null
+  step_status: string | null
 }
 
 export function fromIngestLogRow(row: IngestLogRow): IngestLog {
@@ -525,6 +566,10 @@ export function fromIngestLogRow(row: IngestLogRow): IngestLog {
     ...row,
     extraction_json: safeJson(row.extraction_json, null),
     dry_run: row.dry_run === 1,
+    source_id: row.source_id ?? null,
+    document_id: row.document_id ?? null,
+    chunks_created: row.chunks_created ?? 0,
+    step_status: safeJson(row.step_status, null),
   }
 }
 
@@ -558,7 +603,7 @@ export interface DomainExtraction {
 
 export interface SourceRecord {
   id: string
-  type: 'moodboard' | 'reference' | 'generation' | 'document'
+  type: 'moodboard' | 'reference' | 'generation' | 'document' | 'film' | 'dataset' | 'feed_item' | 'api_entry' | 'external'
   filename: string | null
   mime_type: string | null
   r2_key: string | null
@@ -569,13 +614,23 @@ export interface SourceRecord {
   harmonic_profile: Record<string, string>
   atom_count: number
   created_at: string
+  // Knowledge layer rebuild columns (migration 007)
+  content_type?: string | null
+  document_id?: string | null
+  status?: string | null
+  extraction_model?: string | null
+  extraction_prompt_version?: string | null
 }
 
 export interface KnowledgeIngestRequest {
   url: string
   source_type: IngestSourceType
   collection_slug?: string
+  tags?: string[]
   dry_run?: boolean
+  // For text ingest: bypass fetch and use injected content directly
+  _injected_content?: string
+  _injected_title?: string
 }
 
 export interface KnowledgeIngestResult {
@@ -584,4 +639,15 @@ export interface KnowledgeIngestResult {
   atoms_skipped: string[]
   relations_created: string[]
   dry_run: boolean
+  source_id: string
+  document_id: string
+  chunks_created: number
+  step_status?: Record<string, string>
+}
+
+// Wiki section parsed from HTML structure
+export interface WikiSection {
+  heading: string
+  content: string
+  categoryHint: string | null
 }

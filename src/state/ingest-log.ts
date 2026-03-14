@@ -40,17 +40,23 @@ export async function updateIngestLog(
   id: string,
   updates: {
     status?: IngestLog['status']
+    url?: string
     atoms_created?: number
     atoms_skipped?: number
     relations_created?: number
     extraction_json?: Record<string, unknown>
     error_message?: string
     completed_at?: string
+    source_id?: string
+    document_id?: string
+    chunks_created?: number
+    step_status?: Record<string, string>
   }
 ): Promise<void> {
   const sets: string[] = []
   const binds: unknown[] = []
 
+  if (updates.url !== undefined) { sets.push('url = ?'); binds.push(updates.url) }
   if (updates.status !== undefined) { sets.push('status = ?'); binds.push(updates.status) }
   if (updates.atoms_created !== undefined) { sets.push('atoms_created = ?'); binds.push(updates.atoms_created) }
   if (updates.atoms_skipped !== undefined) { sets.push('atoms_skipped = ?'); binds.push(updates.atoms_skipped) }
@@ -58,6 +64,10 @@ export async function updateIngestLog(
   if (updates.extraction_json !== undefined) { sets.push('extraction_json = ?'); binds.push(JSON.stringify(updates.extraction_json)) }
   if (updates.error_message !== undefined) { sets.push('error_message = ?'); binds.push(updates.error_message) }
   if (updates.completed_at !== undefined) { sets.push('completed_at = ?'); binds.push(updates.completed_at) }
+  if (updates.source_id !== undefined) { sets.push('source_id = ?'); binds.push(updates.source_id) }
+  if (updates.document_id !== undefined) { sets.push('document_id = ?'); binds.push(updates.document_id) }
+  if (updates.chunks_created !== undefined) { sets.push('chunks_created = ?'); binds.push(updates.chunks_created) }
+  if (updates.step_status !== undefined) { sets.push('step_status = ?'); binds.push(JSON.stringify(updates.step_status)) }
 
   if (sets.length === 0) return
 

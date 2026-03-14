@@ -2,7 +2,7 @@
 // Called by ingest.ts when structural validation passes but deeper checks are needed
 
 import { getProvider } from '../providers/index'
-import { PROVIDER } from '../config'
+import { MODELS } from '../models'
 import type { GrimoireAtom, ValidationResult } from './types'
 
 interface DuplicateCheckResult {
@@ -18,7 +18,8 @@ export async function aiDuplicateCheck(
   candidate: Partial<GrimoireAtom>,
   existing: GrimoireAtom
 ): Promise<DuplicateCheckResult> {
-  const provider = getProvider(PROVIDER.VALIDATION, PROVIDER.DEFAULT_MODEL, apiKey)
+  const { model } = MODELS['validate.duplicate'].primary
+  const provider = getProvider('gemini', model, apiKey)
 
   const prompt = `Are these two grimoire entries semantically equivalent?
 

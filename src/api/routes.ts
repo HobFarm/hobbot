@@ -3,11 +3,13 @@
 
 import { createGrimoireHandle } from '../grimoire/handle'
 import { ingestAtom } from '../grimoire/ingest'
-import { ingestKnowledge } from '../services/knowledge-ingest'
 import { logUsage } from '../grimoire/telemetry'
 import { validateServiceToken, unauthorizedResponse } from './auth'
+import { handleSubscribeRequest, handleConfirmRequest, handleUnsubscribeRequest } from './subscribe'
+import { handleBlogRequest } from './blog-routes'
 import { buildHealthDigest } from '../pipeline/digest'
 import { QUERY } from '../config'
+import type { Env as FullEnv } from '../index'
 import type { CorrespondenceQueryOptions } from '../grimoire/types'
 
 function json(data: unknown, status = 200): Response {
@@ -32,8 +34,19 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     return json(digest)
   }
 
+  // Newsletter endpoints (public)
+  if (path === '/api/subscribe') return handleSubscribeRequest(request, env)
+  if (path === '/api/confirm' && request.method === 'GET') return handleConfirmRequest(request, env)
+  if (path === '/api/unsubscribe' && request.method === 'GET') return handleUnsubscribeRequest(request, env)
+
+  // Chat routes proxied to hobbot-chat worker via service binding.
+  // Chat uses JWT auth (CF Access), not service tokens.
+  if (path.startsWith('/api/chat/')) {
+    return env.HOBBOT_CHAT.fetch(request)
+  }
+
   // All other /api/v1/* require auth
-  const auth = validateServiceToken(request, env)
+  const auth = await validateServiceToken(request, env)
   if (!auth.valid) return unauthorizedResponse()
 
   const agent = auth.agent!
@@ -41,6 +54,102 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
   const handle = createGrimoireHandle(env.GRIMOIRE_DB)
 
   try {
+    // --- Admin ---
+
+    if (path === '/api/v1/admin/process-discovery' && request.method === 'POST') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const result = await custodian.processDiscovery()
+      return json(result)
+    }
+
+    // GET /api/v1/admin/harvest-health/:collection_slug
+    if (segments[2] === 'admin' && segments[3] === 'harvest-health' && segments[4] && request.method === 'GET') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const report = await custodian.harvestHealth(segments[4])
+      return json(report)
+    }
+
+    // POST /api/v1/admin/build-correspondences/:source_id
+    if (segments[2] === 'admin' && segments[3] === 'build-correspondences' && segments[4] && request.method === 'POST') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const result = await custodian.buildCorrespondences(segments[4])
+      return json(result)
+    }
+
+    // POST /api/v1/admin/repair-chunk-links
+    // One-time repair: link existing source_atoms to their chunks via substring matching
+    if (path === '/api/v1/admin/repair-chunk-links' && request.method === 'POST') {
+      const db = env.GRIMOIRE_DB
+
+      // Find source_atoms with no chunk_id that have a source with a document
+      const orphans = await db.prepare(`
+        SELECT sa.rowid, sa.source_id, sa.atom_id, a.text_lower,
+               s.document_id
+        FROM source_atoms sa
+        JOIN atoms a ON sa.atom_id = a.id
+        JOIN sources s ON sa.source_id = s.id
+        WHERE sa.chunk_id IS NULL
+          AND s.document_id IS NOT NULL
+        LIMIT 500
+      `).all<{ rowid: number; source_id: string; atom_id: string; text_lower: string; document_id: string }>()
+
+      let repaired = 0
+      let skipped = 0
+
+      for (const orphan of orphans.results ?? []) {
+        // Load chunks for this document
+        const chunks = await db.prepare(
+          `SELECT id, content FROM document_chunks WHERE document_id = ? ORDER BY chunk_index`
+        ).bind(orphan.document_id).all<{ id: string; content: string }>()
+
+        const matchingChunk = (chunks.results ?? []).find(c =>
+          c.content.toLowerCase().includes(orphan.text_lower)
+        )
+
+        if (matchingChunk) {
+          await db.prepare(
+            `UPDATE source_atoms SET chunk_id = ?, extraction_context = 'repair' WHERE source_id = ? AND atom_id = ?`
+          ).bind(matchingChunk.id, orphan.source_id, orphan.atom_id).run()
+          repaired++
+        } else {
+          skipped++
+        }
+      }
+
+      return json({ repaired, skipped, total_checked: (orphans.results ?? []).length })
+    }
+
+    // POST /api/v1/admin/harvest/:source_id
+    if (segments[2] === 'admin' && segments[3] === 'harvest' && segments[4] && request.method === 'POST') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const body = await request.json().catch(() => ({})) as Record<string, unknown>
+      const batchSize = typeof body.batch_size === 'number' ? body.batch_size : 50
+      const result = await custodian.harvest(segments[4], batchSize)
+      return json(result)
+    }
+
+    // POST /api/v1/admin/conductor
+    if (path === '/api/v1/admin/conductor' && request.method === 'POST') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const result = await custodian.runConductor()
+      return json(result)
+    }
+
+    // POST /api/v1/admin/agent/:name
+    if (segments[2] === 'admin' && segments[3] === 'agent' && segments[4] && request.method === 'POST') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const result = await custodian.runAgent(segments[4])
+      return json(result)
+    }
+
+    // GET /api/v1/admin/knowledge-requests?status=pending
+    if (path === '/api/v1/admin/knowledge-requests' && request.method === 'GET') {
+      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const status = url.searchParams.get('status') ?? undefined
+      const result = await custodian.listKnowledgeRequests(status)
+      return json(result)
+    }
+
     // --- Atom queries ---
 
     if (path === '/api/v1/lookup' && request.method === 'GET') {
@@ -153,7 +262,31 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       return json(result, status)
     }
 
-    // --- Knowledge Ingest Pipeline ---
+    // --- Text Ingest (delegated to pipeline worker) ---
+
+    if (path === '/api/v1/ingest/text' && request.method === 'POST') {
+      let body: Record<string, unknown>
+      try { body = await request.json() as Record<string, unknown> } catch { return err('invalid JSON body', 400) }
+      if (!body.title || typeof body.title !== 'string') return err('title is required', 400)
+      if (!body.content || typeof body.content !== 'string') return err('content is required', 400)
+
+      try {
+        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromText({
+          title: body.title,
+          content: body.content,
+          source_type: (body.source_type as string) ?? 'domain',
+          collection_slug: body.collection_slug as string | undefined,
+          tags: body.tags as string[] | undefined,
+          dry_run: body.dry_run as boolean | undefined,
+        })
+        return json(result, 201)
+      } catch (error) {
+        return json({ error: (error as Error).message, code: 500 }, 500)
+      }
+    }
+
+    // --- Knowledge Ingest Pipeline (delegated to pipeline worker) ---
 
     if (path === '/api/v1/ingest/knowledge' && request.method === 'POST') {
       let body: Record<string, unknown>
@@ -161,9 +294,10 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       if (!body.url || typeof body.url !== 'string') return err('url is required', 400)
 
       try {
-        const result = await ingestKnowledge(env, {
+        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromUrl({
           url: body.url,
-          source_type: (body.source_type as 'aesthetic' | 'domain') ?? 'aesthetic',
+          source_type: (body.source_type as string) ?? 'aesthetic',
           collection_slug: body.collection_slug as string | undefined,
           dry_run: body.dry_run as boolean | undefined,
         })
@@ -181,30 +315,31 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       if (!Array.isArray(urls) || urls.length === 0) return err('urls array is required', 400)
       if (urls.length > 10) return err('maximum 10 URLs per batch', 400)
 
-      const collectionSlug = body.collection_slug as string | undefined
-      const dryRun = body.dry_run as boolean | undefined
-      const results: unknown[] = []
-
-      for (let i = 0; i < urls.length; i++) {
-        try {
-          const result = await ingestKnowledge(env, {
-            url: urls[i].url,
-            source_type: (urls[i].source_type as 'aesthetic' | 'domain') ?? 'aesthetic',
-            collection_slug: collectionSlug,
-            dry_run: dryRun,
-          })
-          results.push({ url: urls[i].url, status: 'ok', result })
-        } catch (error) {
-          results.push({ url: urls[i].url, status: 'error', error: (error as Error).message })
-        }
-
-        // Rate limit: 1-second delay between items
-        if (i < urls.length - 1) {
-          await new Promise(r => setTimeout(r, 1000))
-        }
+      try {
+        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const results = await pipeline.ingestBatch({
+          urls,
+          collection_slug: body.collection_slug as string | undefined,
+          dry_run: body.dry_run as boolean | undefined,
+        })
+        return json({ results }, 200)
+      } catch (error) {
+        return json({ error: (error as Error).message, code: 500 }, 500)
       }
+    }
 
-      return json({ results }, 200)
+    if (path === '/api/v1/ingest/pdf' && request.method === 'POST') {
+      let body: Record<string, unknown>
+      try { body = await request.json() as Record<string, unknown> } catch { return err('invalid JSON body', 400) }
+      if (!body.url && !body.r2_key && !body.pdf_base64) return err('url, r2_key, or pdf_base64 required', 400)
+
+      try {
+        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestFromPdf(body)
+        return json(result, 201)
+      } catch (error) {
+        return json({ error: (error as Error).message, code: 500 }, 500)
+      }
     }
 
     if (path === '/api/v1/ingest/knowledge/history' && request.method === 'GET') {
@@ -278,6 +413,10 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         severity: body.severity as 'info' | 'warning' | 'breaking' | undefined,
       })
       return json(result, 201)
+    }
+
+    if (path.startsWith('/api/v1/blog')) {
+      return handleBlogRequest(request, env as unknown as FullEnv, path, segments)
     }
 
     return err('not found', 404)

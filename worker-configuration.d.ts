@@ -3,8 +3,13 @@
 
 interface Env {
   GRIMOIRE_DB: D1Database;
-  GEMINI_API_KEY: string;
+  HOBBOT_DB: D1Database;
   SERVICE_TOKENS: string;
-  AI_GATEWAY_URL?: string;
+  PROVIDER_HEALTH?: KVNamespace;
+  GRIMOIRE: Fetcher;
   ENVIRONMENT: 'development' | 'production';
+  RESEND_API_KEY: string;
+  HOBBOT_CHAT: Fetcher;
+  HOBBOT_CUSTODIAN: Service;
+  HOBBOT_PIPELINE: Service;
 }

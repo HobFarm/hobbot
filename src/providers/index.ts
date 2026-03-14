@@ -2,14 +2,19 @@
 
 import type { AIProvider } from './types';
 import { GeminiProvider, GeminiLocationError } from './gemini';
+import { WorkersAIProvider } from './workers-ai';
 
 export function getProvider(
   name: string,
   model: string,
-  apiKey: string
+  apiKeyOrAi: string | Ai
 ): AIProvider {
   if (name === 'gemini') {
-    return new GeminiProvider(model, apiKey);
+    return new GeminiProvider(model, apiKeyOrAi as string);
+  }
+
+  if (name === 'workers-ai') {
+    return new WorkersAIProvider(model, apiKeyOrAi as Ai);
   }
 
   throw new Error(`Unknown provider: ${name}`);

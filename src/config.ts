@@ -16,9 +16,10 @@ export const BUDGET = {
   QUERIES_PER_DAY: 1000,
 } as const
 
-export const PROVIDER = {
-  VALIDATION: 'gemini' as const,
-  DEFAULT_MODEL: 'gemini-2.5-flash',
+export const CHAT = {
+  MAX_TOOL_ITERATIONS: 5,
+  MAX_TOKENS: 4096,
+  ANTHROPIC_MODEL: 'claude-sonnet-4-20250514',
 } as const
 
 export const CLEANUP = {
