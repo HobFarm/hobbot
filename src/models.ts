@@ -100,13 +100,13 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   'pipeline.indexing': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/ibm-granite/granite-4.0-h-micro',
-      options: { temperature: 0.1, maxOutputTokens: 1024 },
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
+      options: { temperature: 0.1, maxOutputTokens: 4096 },
     },
     fallbacks: [{
       provider: 'gemini',
       model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 1024 },
+      options: { temperature: 0.1, maxOutputTokens: 4096 },
     }],
   },
   'pipeline.correspondence': {
