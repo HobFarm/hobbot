@@ -21,7 +21,7 @@ export interface ContentBlock {
 }
 
 export interface DocumentProvenance {
-  adapter: 'url' | 'text' | 'image' | 'feed_entry' | 'pdf'
+  adapter: 'url' | 'text' | 'image' | 'feed_entry' | 'pdf' | 'reddit'
   fetched_at?: string
   original_url?: string
   feed_entry_id?: number
@@ -30,6 +30,15 @@ export interface DocumentProvenance {
   collection_slug?: string
   arrangement_hints?: string[]
   bibliography_detected?: boolean
+  reddit?: {
+    subreddit: string
+    author: string
+    score: number
+    created_utc: number
+    num_comments: number
+    is_self: boolean
+    external_url: string | null
+  }
 }
 
 export interface ChunkResult {
@@ -118,6 +127,14 @@ export interface IngestFromPdfParams {
   dry_run?: boolean
 }
 
+export interface IngestFromRedditParams {
+  url: string                                       // Reddit post permalink
+  source_type?: 'aesthetic' | 'domain'
+  collection_slug?: string
+  tags?: string[]
+  dry_run?: boolean
+}
+
 export interface ClassifyImageParams {
   image_base64?: string
   image_url?: string
@@ -131,6 +148,7 @@ export interface PipelineRPC {
   ingestBatch(params: IngestBatchParams): Promise<PipelineResult[]>
   ingestFromImage(params: IngestFromImageParams): Promise<PipelineResult>
   ingestFromPdf(params: IngestFromPdfParams): Promise<PipelineResult>
+  ingestFromReddit(params: IngestFromRedditParams): Promise<PipelineResult>
   classifyImage(params: ClassifyImageParams): Promise<unknown>
   runBlogPipeline(channel?: string): Promise<unknown>
   runBridge(): Promise<unknown>
