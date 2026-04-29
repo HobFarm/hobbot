@@ -83,35 +83,31 @@ export async function addRelation(
   input: AddRelationInput
 ): Promise<{ id: string; created: boolean }> {
   const strength = input.strength ?? 0.5
-  const context = input.context ?? null
+  const context = input.context ?? ''
   const source = input.source ?? 'curated'
   const confidence = input.confidence ?? 0.7
-
-  // Check if exact pair+type+context exists; if so, update
-  const existing = await db.prepare(
-    `SELECT id FROM atom_relations
-     WHERE source_atom_id = ? AND target_atom_id = ? AND relation_type = ?
-     AND (context IS ? OR (context = ? AND ? IS NOT NULL))`
-  ).bind(
-    input.source_atom_id, input.target_atom_id, input.relation_type,
-    context, context, context
-  ).first<{ id: string }>()
-
-  if (existing) {
-    await db.prepare(
-      `UPDATE atom_relations SET strength = ?, confidence = ?, source = ?, updated_at = datetime('now')
-       WHERE id = ?`
-    ).bind(strength, confidence, source, existing.id).run()
-    return { id: existing.id, created: false }
-  }
-
   const id = crypto.randomUUID()
+
   await db.prepare(
     `INSERT INTO atom_relations (id, source_atom_id, target_atom_id, relation_type, strength, context, source, confidence)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_atom_id, target_atom_id, relation_type, context)
+     DO UPDATE SET
+       strength = MAX(atom_relations.strength, excluded.strength),
+       confidence = MAX(atom_relations.confidence, excluded.confidence),
+       source = excluded.source,
+       updated_at = datetime('now')`
   ).bind(id, input.source_atom_id, input.target_atom_id, input.relation_type, strength, context, source, confidence).run()
 
-  return { id, created: true }
+  // Detect insert vs update: if our generated id exists, it was a fresh insert.
+  // If ON CONFLICT fired, the existing row kept its original id.
+  const mine = await db.prepare('SELECT id FROM atom_relations WHERE id = ?').bind(id).first<{ id: string }>()
+  if (mine) return { id, created: true }
+
+  const existing = await db.prepare(
+    'SELECT id FROM atom_relations WHERE source_atom_id = ? AND target_atom_id = ? AND relation_type = ? AND context = ?'
+  ).bind(input.source_atom_id, input.target_atom_id, input.relation_type, context).first<{ id: string }>()
+  return { id: existing!.id, created: false }
 }
 
 export async function getRelationCounts(db: D1Database): Promise<{ total: number; byType: Record<string, number> }> {

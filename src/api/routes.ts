@@ -9,7 +9,7 @@ import { handleSubscribeRequest, handleConfirmRequest, handleUnsubscribeRequest 
 import { handleBlogRequest } from './blog-routes'
 import { buildHealthDigest } from '../pipeline/digest'
 import { QUERY } from '../config'
-import type { Env as FullEnv } from '../index'
+import type { Env } from '../index'
 import type { CorrespondenceQueryOptions } from '../grimoire/types'
 
 function json(data: unknown, status = 200): Response {
@@ -57,21 +57,21 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     // --- Admin ---
 
     if (path === '/api/v1/admin/process-discovery' && request.method === 'POST') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const result = await custodian.processDiscovery()
       return json(result)
     }
 
     // GET /api/v1/admin/harvest-health/:collection_slug
     if (segments[2] === 'admin' && segments[3] === 'harvest-health' && segments[4] && request.method === 'GET') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const report = await custodian.harvestHealth(segments[4])
       return json(report)
     }
 
     // POST /api/v1/admin/build-correspondences/:source_id
     if (segments[2] === 'admin' && segments[3] === 'build-correspondences' && segments[4] && request.method === 'POST') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const result = await custodian.buildCorrespondences(segments[4])
       return json(result)
     }
@@ -121,7 +121,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
 
     // POST /api/v1/admin/harvest/:source_id
     if (segments[2] === 'admin' && segments[3] === 'harvest' && segments[4] && request.method === 'POST') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const body = await request.json().catch(() => ({})) as Record<string, unknown>
       const batchSize = typeof body.batch_size === 'number' ? body.batch_size : 50
       const result = await custodian.harvest(segments[4], batchSize)
@@ -130,21 +130,21 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
 
     // POST /api/v1/admin/conductor
     if (path === '/api/v1/admin/conductor' && request.method === 'POST') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const result = await custodian.runConductor()
       return json(result)
     }
 
     // POST /api/v1/admin/agent/:name
     if (segments[2] === 'admin' && segments[3] === 'agent' && segments[4] && request.method === 'POST') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const result = await custodian.runAgent(segments[4])
       return json(result)
     }
 
     // GET /api/v1/admin/knowledge-requests?status=pending
     if (path === '/api/v1/admin/knowledge-requests' && request.method === 'GET') {
-      const custodian = (env as unknown as FullEnv).HOBBOT_CUSTODIAN as any
+      const custodian = env.HOBBOT_CUSTODIAN as any
       const status = url.searchParams.get('status') ?? undefined
       const result = await custodian.listKnowledgeRequests(status)
       return json(result)
@@ -271,7 +271,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       if (!body.content || typeof body.content !== 'string') return err('content is required', 400)
 
       try {
-        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const pipeline = env.HOBBOT_PIPELINE as any
         const result = await pipeline.ingestFromText({
           title: body.title,
           content: body.content,
@@ -294,7 +294,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       if (!body.url || typeof body.url !== 'string') return err('url is required', 400)
 
       try {
-        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const pipeline = env.HOBBOT_PIPELINE as any
         const result = await pipeline.ingestFromUrl({
           url: body.url,
           source_type: (body.source_type as string) ?? 'aesthetic',
@@ -316,7 +316,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       if (urls.length > 10) return err('maximum 10 URLs per batch', 400)
 
       try {
-        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const pipeline = env.HOBBOT_PIPELINE as any
         const results = await pipeline.ingestBatch({
           urls,
           collection_slug: body.collection_slug as string | undefined,
@@ -334,7 +334,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       if (!body.url && !body.r2_key && !body.pdf_base64) return err('url, r2_key, or pdf_base64 required', 400)
 
       try {
-        const pipeline = (env as unknown as FullEnv).HOBBOT_PIPELINE as any
+        const pipeline = env.HOBBOT_PIPELINE as any
         const result = await pipeline.ingestFromPdf(body)
         return json(result, 201)
       } catch (error) {
@@ -416,7 +416,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     }
 
     if (path.startsWith('/api/v1/blog')) {
-      return handleBlogRequest(request, env as unknown as FullEnv, path, segments)
+      return handleBlogRequest(request, env, path, segments)
     }
 
     return err('not found', 404)

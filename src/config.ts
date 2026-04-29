@@ -19,7 +19,11 @@ export const BUDGET = {
 export const CHAT = {
   MAX_TOOL_ITERATIONS: 5,
   MAX_TOKENS: 4096,
-  ANTHROPIC_MODEL: 'claude-sonnet-4-20250514',
+  MAX_HISTORY_MESSAGES: 40,
+  SUMMARIZE_THRESHOLD: 30,
+  SUMMARIZE_KEEP_RECENT: 20,
+  SUMMARIZE_MAX_INPUT_CHARS: 3800,
+  DASHSCOPE_ENDPOINT: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions',
 } as const
 
 export const CLEANUP = {

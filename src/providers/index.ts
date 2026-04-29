@@ -20,6 +20,18 @@ export function getProvider(
   throw new Error(`Unknown provider: ${name}`);
 }
 
+// --- Secrets Store key resolution ---
+// Handles both plain strings and Cloudflare Secrets Store bindings (Fetcher with .get()).
+// Previously duplicated in 7 files across chat, custodian, and pipeline workers.
+
+export async function resolveApiKey(key: string | { get: () => Promise<string> }): Promise<string> {
+  if (typeof key === 'string') return key
+  if (key && typeof key === 'object' && 'get' in key) return await key.get()
+  return String(key)
+}
+
 // Re-export types and errors for convenience
 export type { AIProvider, AIRequest, AIResponse, AIMessage, AIUsage } from './types';
 export { GeminiLocationError } from './gemini';
+export { createTokenLogger } from './token-log';
+export type { TokenUsageReport } from './call-with-json-parse';

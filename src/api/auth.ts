@@ -1,6 +1,8 @@
 // Service token validation for API endpoints
 // Tokens stored as comma-separated "agent:token" pairs in SERVICE_TOKENS env var
 
+import type { Env } from '../index'
+
 export interface AuthResult {
   valid: boolean
   agent: string | null

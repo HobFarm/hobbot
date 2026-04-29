@@ -17,6 +17,7 @@ export interface Env {
   HOBBOT_CHAT: Fetcher
   HOBBOT_CUSTODIAN: Service
   HOBBOT_PIPELINE: Service
+  REDDIT_SCANNER: Fetcher
 }
 
 function healthResponse(db: D1Database): Promise<Response> {
@@ -45,5 +46,21 @@ export default {
     })
   },
 
-  // No scheduled handler: all crons moved to hobbot-pipeline worker
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    // Daily retention cleanup for gateway-owned tables
+    try {
+      const toolExec = await env.HOBBOT_DB.prepare(
+        `DELETE FROM tool_executions WHERE created_at < datetime('now', '-30 days')`
+      ).run()
+      const actions = await env.HOBBOT_DB.prepare(
+        `DELETE FROM hobbot_actions WHERE created_at < datetime('now', '-90 days')`
+      ).run()
+      const tokens = await env.HOBBOT_DB.prepare(
+        `DELETE FROM token_usage WHERE created_at < datetime('now', '-90 days')`
+      ).run()
+      console.log(`[cleanup] tool_executions: ${toolExec.meta.changes}, hobbot_actions: ${actions.meta.changes}, token_usage: ${tokens.meta.changes} deleted`)
+    } catch (e) {
+      console.error(`[cleanup] retention failed: ${e instanceof Error ? e.message : e}`)
+    }
+  },
 }

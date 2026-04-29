@@ -37,8 +37,15 @@ binding = "HOBBOT_PIPELINE"
 service = "hobbot-pipeline"
 entrypoint = "PipelineEntrypoint"
 
+[[services]]
+binding = "REDDIT_SCANNER"
+service = "reddit-scanner"
+
+[triggers]
+crons = ["0 3 * * *"]
+
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
 
 # Secrets Store
 [[secrets_store_secrets]]

@@ -1,6 +1,8 @@
 // Newsletter subscription endpoints
 // POST /api/subscribe, GET /api/confirm, GET /api/unsubscribe
 
+import type { Env } from '../index'
+
 const ALLOWED_ORIGINS = ['https://hob.farm', 'https://www.hob.farm', 'http://localhost:4321']
 const RATE_LIMIT_MAX = 5
 const RATE_LIMIT_TTL = 3600

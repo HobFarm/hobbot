@@ -1,0 +1,6 @@
+export type { ToolManifest, ToolSurface, ToolAuth, ToolCategory, ToolHooks, ToolBudget } from './types'
+export { registerMcpTool, toChatToolDef } from './generators'
+export type { ChatToolDef } from './generators'
+export { wrapWithHooks } from './hooks'
+export type { HookContext, PostHookContext, PreHookResult, PreHook, PostHook } from './hooks'
+export { GRIMOIRE_MANIFESTS } from './manifests'
