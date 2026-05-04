@@ -37,10 +37,6 @@ binding = "HOBBOT_PIPELINE"
 service = "hobbot-pipeline"
 entrypoint = "PipelineEntrypoint"
 
-[[services]]
-binding = "REDDIT_SCANNER"
-service = "reddit-scanner"
-
 [triggers]
 crons = ["0 3 * * *"]
 

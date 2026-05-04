@@ -712,38 +712,6 @@ export function createGrimoireMcpServer(env: Env): McpServer {
     },
   )
 
-  // --- Reddit Signals (Service Binding to reddit-scanner worker) ---
-
-  server.tool(
-    'reddit_signals',
-    'Get AI subreddit topic signals and trends. No args: latest daily trend summary. subreddit: filter by sub. query: search topic labels.',
-    {
-      query: z.string().optional().describe('Search topic labels (e.g. "stable diffusion", "local llm")'),
-      subreddit: z.string().optional().describe('Filter by subreddit name (e.g. "StableDiffusion", "LocalLLaMA")'),
-      days: z.number().min(1).max(30).optional().describe('Number of days to look back (default 7)'),
-    },
-    async ({ query, subreddit, days }) => {
-      try {
-        const response = await env.REDDIT_SCANNER.fetch(
-          'https://reddit-scanner/api/signals',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, subreddit, days }),
-          },
-        )
-        if (!response.ok) {
-          const err = await response.text()
-          return errText({ error: 'reddit_scanner_error', message: err })
-        }
-        const data = await response.json()
-        return text(data)
-      } catch (e) {
-        return errText({ error: 'reddit_scanner_unavailable', message: (e as Error).message })
-      }
-    },
-  )
-
   // --- Admin tools (system health, data inspection, model/config) ---
   registerAdminTools(server, env)
   registerAdminWriteTools(server, env)

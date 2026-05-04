@@ -188,7 +188,7 @@ export function registerAdminTools(server: McpServer, env: Env) {
       // Pipeline and custodian runtime data from KV
       const kvRuns: Record<string, unknown>[] = []
       if (env.PROVIDER_HEALTH) {
-        for (const prefix of ['cron:last:hobbot-pipeline:', 'cron:last:hobbot-custodian:', 'cron:last:reddit-scanner:']) {
+        for (const prefix of ['cron:last:hobbot-pipeline:', 'cron:last:hobbot-custodian:']) {
           const listed = await env.PROVIDER_HEALTH.list({ prefix, limit: 50 })
           for (const key of listed.keys) {
             const raw = await env.PROVIDER_HEALTH.get(key.name)

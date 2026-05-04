@@ -17,7 +17,6 @@ export interface Env {
   HOBBOT_CHAT: Fetcher
   HOBBOT_CUSTODIAN: Service
   HOBBOT_PIPELINE: Service
-  REDDIT_SCANNER: Fetcher
 }
 
 function healthResponse(db: D1Database): Promise<Response> {
