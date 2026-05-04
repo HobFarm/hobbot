@@ -204,6 +204,14 @@ HobBot/
 - All model strings come from the shared MODELS registry in src/models.ts. No hardcoded model strings in worker code.
 - Verify Workers AI model strings against https://developers.cloudflare.com/workers-ai/models/ not `wrangler ai models --search`, which has incomplete coverage of non-text-generation models (object detection, summarization, etc.).
 
+### D1 Migrations
+
+HobBot writes to `hobbot-db` (binding `HOBBOT_DB`), with migrations at `HobBot/migrations/hobbot/`. Apply via `npx wrangler d1 migrations apply hobbot-db --remote` from the `HobBot/` directory.
+
+**Rules are identical to the grimoire worker.** See `workers/grimoire/CLAUDE.md` "D1 Migrations" section for the full list (idempotent migrations, never use `--command/--file` for schema, sequential numbering, table-rebuild pattern for CHECK changes, manual-apply requires immediate `INSERT INTO d1_migrations`).
+
+Current state (post-reconciliation 2026-05-04): 14 migrations on disk (`0001_hobbot_agent.sql` → `0014_feed_entries_check_expand.sql`), all recorded in `d1_migrations`. Clean.
+
 ### What NOT To Do
 
 - Do not add crons to this worker
