@@ -1,9 +1,8 @@
-# HobBot Gateway (hobbot-worker)
+# HobBot Gateway (hobbot-worker) + Shared Module Catalog
 
-> CC: Read this file completely before starting any task.
-> This file describes architecture and behavior, not current state.
-> Never cite counts or model version strings from this file.
-> Query the actual database or worker config for current values.
+> CC: Read this file together with the root [CLAUDE.md](../CLAUDE.md) before starting work. The root file owns architecture, schema conventions, deploy rules, and the documented exceptions list. This file owns the gateway worker's bindings + the catalog of shared modules under `src/shared/` that every worker imports.
+>
+> `HobBot/` is a separate git repository nested inside the grimoire tree (own `.git`, excluded from grimoire `.gitignore`, **not** included in grimoire git worktrees). Builds for any `hobbot-*` worker fail in worktrees because `@shared/*` resolves to `../../HobBot/src/*`. Always work from the main checkout.
 
 ## What This Worker Does
 
@@ -31,7 +30,7 @@ Verify against `wrangler.toml` before making changes.
 
 | Var | Value | Purpose |
 |-----|-------|---------|
-| ENVIRONMENT | "development" | Environment flag (note: set to development, not production) |
+| ENVIRONMENT | "production" | Environment flag |
 
 ## The Swarm Topology
 
@@ -155,25 +154,76 @@ HobBot/
   CLAUDE.md               # This file
 ```
 
-### Shared Code (Critical)
+### Shared Module Catalog (`HobBot/src/`)
 
-`HobBot/src/` contains shared code imported by ALL child workers via tsconfig paths alias:
+Imported by every worker via `@shared/*` tsconfig path alias (`paths: { "@shared/*": ["../../HobBot/src/*"] }`). **Do not delete or move these without auditing every worker that imports them.**
 
-```json
-{ "compilerOptions": { "paths": { "@shared/*": ["../../HobBot/src/*"] } } }
-```
+#### Top level
 
-**Do not delete these directories.** Every child worker depends on them:
+| Module | Purpose |
+|--------|---------|
+| config.ts | Cross-worker constants (chat caps, custodian scan limits, query bounds) |
+| logger.ts | Structured JSON logger factory for Cloudflare log search |
+| ledger.ts | Session-action ledger (ingestion, generation, posting, failure) |
+| models.ts | **Authoritative model registry**. Task-keyed entries with primary + fallback chains. Single source of truth for every worker's model strings. |
 
-| Directory | Used By | Purpose |
-|-----------|---------|---------|
-| grimoire/ | All workers | GrimoireHandle, ingest, types, immune, telemetry |
-| state/ | All workers | D1 query modules for all tables |
-| providers/ | pipeline, grimoire, custodian | Gemini, Workers AI provider wrappers, factory |
-| rpc/ | pipeline, gateway | NormalizedDocument, PipelineResult, param types |
-| config.ts | All workers | Shared constants |
-| models.ts | All workers | Model registry, task-to-model mapping (single source of truth for all workers) |
-| ledger.ts | pipeline, custodian | Session ledger logging |
+#### Provider abstraction (`providers/`)
+
+| Module | Purpose |
+|--------|---------|
+| index.ts | `getProvider()` factory + `callWithFallback()` utility |
+| workers-ai.ts | `WorkersAIProvider` (edge-native via `env.AI.run()`) |
+| gemini.ts | `GeminiProvider` (HTTP through AI Gateway, falls back to direct Google API on 401) |
+| call-with-json-parse.ts | Unified JSON-output wrapper: retry, fallback, think-block stripping, schema validation |
+| token-log.ts | Token usage logger |
+| types.ts | Provider interface definitions |
+
+#### Grimoire query layer (`grimoire/` + `state/`)
+
+| Module | Purpose |
+|--------|---------|
+| grimoire/handle.ts | `GrimoireHandle` factory — public query interface; delegates to `state/` for SQL |
+| grimoire/ingest.ts | `ingestAtom()` write path (sanitize, validate, insert, hook enqueue) |
+| grimoire/immune.ts | AI duplicate detection (semantic equivalence check) |
+| grimoire/types.ts | Core domain types (GrimoireAtom, Arrangement, Category, Collection, IntegrityIssue, …) |
+| grimoire/telemetry.ts | Telemetry tracking |
+| state/grimoire.ts | Atoms, arrangements, categories, collections (authoritative D1 layer) |
+| state/documents.ts | documents + document_chunks queries |
+| state/graph.ts | atom_relations, correspondences, graph traversal |
+| state/relations.ts | Atom relation queries |
+| state/discovery.ts | discovery_queue queries |
+| state/sources.ts | Content source tracking |
+| state/audit.ts | Audit log queries |
+| state/budget.ts | Budget tracking |
+| state/dirty-flags.ts | KV-backed cron phase optimization (used by grimoire worker) |
+| state/ingest-log.ts | Ingest tracking |
+
+#### RPC contracts (`rpc/`)
+
+| Module | Purpose |
+|--------|---------|
+| pipeline-types.ts | Shared types for `hobbot-pipeline` (NormalizedDocument, ChunkResult, PipelineResult, param shapes) |
+
+#### Pipeline utilities (`pipeline/`)
+
+| Module | Purpose |
+|--------|---------|
+| validate.ts | Shared validation helpers |
+| sanitize.ts | Input sanitization |
+| digest.ts | Health digest builder |
+| decision-trace.ts | Decision logging |
+
+#### Tools / MCP (`tools/`, `mcp/`, `clients/`)
+
+| Module | Purpose |
+|--------|---------|
+| tools/manifests/grimoire.ts | Grimoire tool manifest (the canonical tool catalog) |
+| tools/generators.ts | `toChatToolDef`, `registerMcpTool` — convert manifests into chat-tool and MCP-tool defs |
+| tools/hooks.ts | Pre/post hook system |
+| mcp/server.ts | MCP server implementation (gateway-side) |
+| mcp/admin-tools.ts | Read-only admin tool definitions |
+| mcp/admin-write-tools.ts | Write-capable admin tool definitions |
+| clients/archive-org.ts | Internet Archive API client (rate-limited, retry) — used by hobbot-custodian |
 
 ## Rules for CC
 
@@ -208,9 +258,9 @@ HobBot/
 
 HobBot writes to `hobbot-db` (binding `HOBBOT_DB`), with migrations at `HobBot/migrations/hobbot/`. Apply via `npx wrangler d1 migrations apply hobbot-db --remote` from the `HobBot/` directory.
 
-**Rules are identical to the grimoire worker.** See `workers/grimoire/CLAUDE.md` "D1 Migrations" section for the full list (idempotent migrations, never use `--command/--file` for schema, sequential numbering, table-rebuild pattern for CHECK changes, manual-apply requires immediate `INSERT INTO d1_migrations`).
+**Rules are identical to the grimoire worker.** See [workers/grimoire/CLAUDE.md](../workers/grimoire/CLAUDE.md) "D1 Migrations" section for the full list (idempotent migrations, never use `--command/--file` for schema, sequential numbering, table-rebuild pattern for CHECK changes, manual-apply requires immediate `INSERT INTO d1_migrations`). The cross-cutting Migration Safety Rules in the [root CLAUDE.md](../CLAUDE.md) also apply.
 
-Current state (post-reconciliation 2026-05-04): 14 migrations on disk (`0001_hobbot_agent.sql` → `0014_feed_entries_check_expand.sql`), all recorded in `d1_migrations`. Clean.
+For current state, run `ls HobBot/migrations/hobbot/` and query the remote `d1_migrations` table — those are authoritative.
 
 ### What NOT To Do
 
@@ -229,14 +279,7 @@ npm run build
 npx wrangler deploy
 ```
 
-Always build before deploy. Always `--remote` for D1 commands.
-
-**Deploy order (children first, gateway last):**
-```
-hobbot-chat → hobbot-custodian → hobbot-pipeline → hobbot-worker
-```
-
-This order matters because the gateway's service bindings reference child workers. If a child worker adds a new RPC method, deploy the child first so the method exists when the gateway tries to call it.
+The cross-cutting Deploy Rules live in the [root CLAUDE.md](../CLAUDE.md#deploy-rules) — read those first (they cover deploy order, the worktree warning, the git-status precheck, the `git diff --name-only` rule, and the post-task commit requirement).
 
 After deploying, verify:
 - Health endpoint returns OK: `curl https://hobbot-worker.damp-violet-bf89.workers.dev/`
