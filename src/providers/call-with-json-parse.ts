@@ -115,7 +115,7 @@ async function fetchGeminiViaGateway(
   geminiKey: string,
   systemPrompt: string,
   userContent: string,
-  options: { temperature?: number; maxOutputTokens?: number },
+  options: { temperature?: number; maxOutputTokens?: number; thinkingBudget?: number },
   gateway?: GatewayConfig,
 ): Promise<string> {
   const directUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`
@@ -123,13 +123,18 @@ async function fetchGeminiViaGateway(
     ? `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.name}/google-ai-studio/v1beta/models/${model}:generateContent?key=${geminiKey}`
     : null
 
+  const generationConfig: Record<string, unknown> = {
+    temperature: options.temperature ?? 0.2,
+    maxOutputTokens: options.maxOutputTokens ?? 1024,
+    responseMimeType: 'application/json',
+  }
+  if (typeof options.thinkingBudget === 'number') {
+    generationConfig.thinkingConfig = { thinkingBudget: options.thinkingBudget }
+  }
+
   const body = JSON.stringify({
     contents: [{ parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }],
-    generationConfig: {
-      temperature: options.temperature ?? 0.2,
-      maxOutputTokens: options.maxOutputTokens ?? 1024,
-      responseMimeType: 'application/json',
-    },
+    generationConfig,
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
       { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
@@ -218,6 +223,7 @@ export async function callWithJsonParse<T>(
       ],
       temperature: primary.options?.temperature ?? 0.2,
       maxTokens: primary.options?.maxOutputTokens ?? 1024,
+      ...(typeof primary.options?.thinkingBudget === 'number' ? { thinkingBudget: primary.options.thinkingBudget } : {}),
       ...(primary.provider === 'gemini' ? { responseFormat: 'json' as const } : {}),
     }
 
@@ -283,6 +289,7 @@ async function attemptFallbacks<T>(
           fetchGeminiViaGateway(fb.model, geminiKey, systemPrompt, userContent, {
             temperature: fb.options?.temperature,
             maxOutputTokens: fb.options?.maxOutputTokens,
+            thinkingBudget: fb.options?.thinkingBudget,
           }, options?.gateway),
           timeoutMs,
           `${taskType}:fallback:${fb.model}`,
@@ -296,6 +303,7 @@ async function attemptFallbacks<T>(
           ],
           temperature: fb.options?.temperature ?? 0.2,
           maxTokens: fb.options?.maxOutputTokens ?? 1024,
+          ...(typeof fb.options?.thinkingBudget === 'number' ? { thinkingBudget: fb.options.thinkingBudget } : {}),
         }), timeoutMs, `${taskType}:fallback:${fb.model}`)
         text = fbResp.content
         // Fire usage callback for Workers AI fallback (Gemini fallback via gateway doesn't expose usage)

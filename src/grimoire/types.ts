@@ -89,6 +89,10 @@ export interface Arrangement {
   category_weights: Record<string, unknown>
   context_key: string | null
   register: number | null
+  era_label: string | null
+  era_start_year: number | null
+  era_end_year: number | null
+  era_confidence: string | null
 }
 
 export function fromArrangementRow(row: ArrangementRow): Arrangement {
@@ -528,7 +532,7 @@ export interface ProviderBehaviorQuery {
 
 // ---------- Knowledge Ingest Pipeline ----------
 
-export type IngestSourceType = 'aesthetic' | 'domain'
+export type IngestSourceType = 'aesthetic' | 'domain' | 'curated_r2'
 export type IngestLogStatus = 'pending' | 'processing' | 'complete' | 'partial' | 'failed'
 
 export interface IngestLog {

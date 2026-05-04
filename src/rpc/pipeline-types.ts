@@ -21,12 +21,14 @@ export interface ContentBlock {
 }
 
 export interface DocumentProvenance {
-  adapter: 'url' | 'text' | 'image' | 'feed_entry' | 'pdf' | 'reddit'
+  adapter: 'url' | 'text' | 'text-url' | 'text-r2' | 'image' | 'feed_entry' | 'pdf' | 'reddit'
   fetched_at?: string
+  ingested_at?: string
   original_url?: string
   feed_entry_id?: number
   image_r2_key?: string
   pdf_r2_key?: string
+  r2_key?: string
   collection_slug?: string
   arrangement_hints?: string[]
   bibliography_detected?: boolean
@@ -112,6 +114,14 @@ export interface IngestFromImageParams {
   filename: string
   collection_slug?: string
   dry_run?: boolean
+  // Curated R2 ingest fields. Set by the queue consumer (from-image-r2 path) so
+  // the vision prompt is primed with source language/domain context and the
+  // resulting NormalizedDocument carries the canonical r2:// source URL instead
+  // of the synthetic CDN upload URL.
+  meta_context?: { language?: string; domain?: string; notes?: string; title?: string }
+  canonical_source_url?: string
+  source_slug?: string
+  skip_r2_upload?: boolean
 }
 
 export interface IngestFromPdfParams {
@@ -120,11 +130,44 @@ export interface IngestFromPdfParams {
   pdf_base64?: string       // raw base64 content
   filename?: string         // original filename
   title?: string            // override extracted title
-  source_type?: 'aesthetic' | 'domain'
+  source_type?: 'aesthetic' | 'domain' | 'curated_r2'
   collection_slug?: string
   tags?: string[]
   arrangement_hints?: string[]  // e.g. ['bauhaus', 'constructivism'] - helps tagger
   dry_run?: boolean
+}
+
+export interface IngestFromTextUrlParams {
+  url: string                // URL to a plain-text file (e.g. archive.org djvu.txt)
+  filename?: string          // optional filename hint for provenance
+  title?: string             // override title (otherwise derived from URL)
+  source_type?: 'aesthetic' | 'domain'
+  collection_slug?: string
+  tags?: string[]
+  arrangement_hints?: string[]
+  dry_run?: boolean
+}
+
+// Fire-and-forget result. ingestTextOnly stops after chunk creation; enrichment
+// is left to the cron sweep (or manual /internal/enrich-trigger).
+export interface IngestTextOnlyResult {
+  document_id: string
+  source_id: string
+  chunk_count: number
+  status: 'complete' | 'no_content' | 'already_ingested'
+  enrichment: 'queued' | 'skipped'
+  ingest_log?: Record<string, unknown>
+}
+
+// Same shape as IngestTextOnlyResult but for the PDF path. Mirrors the
+// fire-and-forget pattern: fetch + extract + chunk, no inline enrichment.
+export interface IngestPdfOnlyResult {
+  document_id: string
+  source_id: string
+  chunk_count: number
+  status: 'complete' | 'no_content' | 'already_ingested'
+  enrichment: 'queued' | 'skipped'
+  ingest_log?: Record<string, unknown>
 }
 
 export interface IngestFromRedditParams {
@@ -148,6 +191,9 @@ export interface PipelineRPC {
   ingestBatch(params: IngestBatchParams): Promise<PipelineResult[]>
   ingestFromImage(params: IngestFromImageParams): Promise<PipelineResult>
   ingestFromPdf(params: IngestFromPdfParams): Promise<PipelineResult>
+  ingestFromTextUrl(params: IngestFromTextUrlParams): Promise<PipelineResult>
+  ingestTextOnly(params: IngestFromTextUrlParams): Promise<IngestTextOnlyResult>
+  ingestPdfOnly(params: IngestFromPdfParams): Promise<IngestPdfOnlyResult>
   ingestFromReddit(params: IngestFromRedditParams): Promise<PipelineResult>
   classifyImage(params: ClassifyImageParams): Promise<unknown>
   runBlogPipeline(channel?: string): Promise<unknown>

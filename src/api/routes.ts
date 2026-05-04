@@ -267,17 +267,81 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     if (path === '/api/v1/ingest/text' && request.method === 'POST') {
       let body: Record<string, unknown>
       try { body = await request.json() as Record<string, unknown> } catch { return err('invalid JSON body', 400) }
-      if (!body.title || typeof body.title !== 'string') return err('title is required', 400)
-      if (!body.content || typeof body.content !== 'string') return err('content is required', 400)
+
+      const hasUrl = typeof body.url === 'string' && body.url
+      const hasContent = typeof body.content === 'string' && body.content
+
+      if (!hasUrl && !hasContent) return err('url or content is required', 400)
+      if (hasContent && (!body.title || typeof body.title !== 'string')) {
+        return err('title is required when posting content', 400)
+      }
 
       try {
         const pipeline = env.HOBBOT_PIPELINE as any
-        const result = await pipeline.ingestFromText({
-          title: body.title,
-          content: body.content,
+        const result = hasUrl
+          ? await pipeline.ingestFromTextUrl({
+              url: body.url,
+              filename: body.filename as string | undefined,
+              title: body.title as string | undefined,
+              source_type: (body.source_type as string) ?? 'domain',
+              collection_slug: body.collection_slug as string | undefined,
+              tags: body.tags as string[] | undefined,
+              arrangement_hints: body.arrangement_hints as string[] | undefined,
+              dry_run: body.dry_run as boolean | undefined,
+            })
+          : await pipeline.ingestFromText({
+              title: body.title,
+              content: body.content,
+              source_type: (body.source_type as string) ?? 'domain',
+              collection_slug: body.collection_slug as string | undefined,
+              tags: body.tags as string[] | undefined,
+              dry_run: body.dry_run as boolean | undefined,
+            })
+        return json(result, 201)
+      } catch (error) {
+        return json({ error: (error as Error).message, code: 500 }, 500)
+      }
+    }
+
+    // Fire-and-forget PDF ingest. Same pattern as text-async but for the PDF
+    // path: fetch + Workers AI toMarkdown + chunk, no inline enrichment.
+    // Caveat: PDFs are buffered into Worker memory (128MB cap), so files
+    // ~30MB+ will OOM during fetch. Pre-stage large files to R2 first.
+    if (path === '/api/v1/ingest/pdf-async' && request.method === 'POST') {
+      let body: Record<string, unknown>
+      try { body = await request.json() as Record<string, unknown> } catch { return err('invalid JSON body', 400) }
+      if (!body.url && !body.r2_key && !body.pdf_base64) {
+        return err('url, r2_key, or pdf_base64 required', 400)
+      }
+
+      try {
+        const pipeline = env.HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestPdfOnly(body)
+        return json(result, 201)
+      } catch (error) {
+        return json({ error: (error as Error).message, code: 500 }, 500)
+      }
+    }
+
+    // Fire-and-forget text ingest. Creates source/document/chunks, marks
+    // ingest_log complete, returns immediately. Enrichment happens via cron
+    // sweep, not inline. Use this for bulk campaigns where you don't want the
+    // gateway HTTP response tied to the multi-minute enrichment pipeline.
+    if (path === '/api/v1/ingest/text-async' && request.method === 'POST') {
+      let body: Record<string, unknown>
+      try { body = await request.json() as Record<string, unknown> } catch { return err('invalid JSON body', 400) }
+      if (!body.url || typeof body.url !== 'string') return err('url is required', 400)
+
+      try {
+        const pipeline = env.HOBBOT_PIPELINE as any
+        const result = await pipeline.ingestTextOnly({
+          url: body.url,
+          filename: body.filename as string | undefined,
+          title: body.title as string | undefined,
           source_type: (body.source_type as string) ?? 'domain',
           collection_slug: body.collection_slug as string | undefined,
           tags: body.tags as string[] | undefined,
+          arrangement_hints: body.arrangement_hints as string[] | undefined,
           dry_run: body.dry_run as boolean | undefined,
         })
         return json(result, 201)

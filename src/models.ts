@@ -3,14 +3,14 @@
 export type TaskType =
   | 'validate.duplicate'        // AI duplicate check
   | 'image.analyze'             // Vision classification (Workers AI primary, Gemini fallback)
+  | 'image.analyze.curated'     // Curated R2 ingest vision (Grok 4.3 primary, Gemini fallback). Reads brand text + translates non-English body copy.
   | 'knowledge.extract'         // knowledge ingest extraction (legacy, kept for backward compat)
   | 'blog.compose'              // blog post generation (Nemotron primary, Gemini fallback)
   | 'pipeline.enrichment'       // per-chunk enrichment: summary, categories, arrangements, concepts (also used by cron safety net)
-  | 'chunk.summary'             // single-purpose chunk summary (Workers-AI-only chain, used by grimoire BulkSummarizeWorkflow backfill)
+  // chunk.summary and moodboard.aggregate live in workers/grimoire/src/models.ts (authoritative for grimoire-only tasks)
   | 'pipeline.vocabulary'       // vocabulary matching: semantic disambiguation
   | 'pipeline.indexing'         // new vocabulary entry classification
   | 'pipeline.correspondence'   // relation identification between concepts
-  | 'moodboard.aggregate'       // synthesize N per-image IRs into one aggregate moodboard IR (Qwen3 -> Nemotron, workers-ai only)
   // Custodian tasks (moved from workers/hobbot-custodian/src/models.ts)
   | 'custodian.intent'          // Gap -> search intent (Nemotron)
   | 'custodian.queries'         // Intent -> IA queries (Qwen3)
@@ -63,6 +63,10 @@ export const MODELS: Record<TaskType, TaskConfig> = {
     },
     fallbacks: [],
   },
+  // Workers AI primary, Workers AI fallback per global rule. Mistral Small 3.1
+  // is a different vision family from Llama 4 Scout, so a Scout failure mode
+  // (e.g. JSON parse error from truncated thinking, vision attention miss) is
+  // unlikely to repeat on Mistral. No external-provider fallback by design.
   'image.analyze': {
     primary: {
       provider: 'workers-ai',
@@ -71,13 +75,33 @@ export const MODELS: Record<TaskType, TaskConfig> = {
     },
     fallbacks: [
       {
-        provider: 'gemini',
-        model: 'gemini-2.5-flash',
+        provider: 'workers-ai',
+        model: '@cf/mistralai/mistral-small-3.1-24b-instruct',
+        options: { temperature: 0.1, maxOutputTokens: 4096 },
+      },
+    ],
+  },
+  // Curated ingest path: Grok 4.3 reads brand text and translates Japanese body
+  // copy (A/B-validated against Scout: 12 vs 5 items, 100% vs 0% brand attribution).
+  // External provider justified at the primary because no Workers AI vision model
+  // currently matches Grok's OCR + translation depth on Japanese catalogs.
+  // Fallback chain is all Workers AI per the global rule: Mistral Small 3.1 (different
+  // vision family) then Llama 4 Scout (last-resort, known weaker on this content).
+  'image.analyze.curated': {
+    primary: {
+      provider: 'xai',
+      model: 'grok-4.3',
+      options: { temperature: 0.1, maxOutputTokens: 4096 },
+    },
+    fallbacks: [
+      {
+        provider: 'workers-ai',
+        model: '@cf/mistralai/mistral-small-3.1-24b-instruct',
         options: { temperature: 0.1, maxOutputTokens: 4096 },
       },
       {
-        provider: 'gemini',
-        model: 'gemini-2.5-flash-lite',
+        provider: 'workers-ai',
+        model: '@cf/meta/llama-4-scout-17b-16e-instruct',
         options: { temperature: 0.1, maxOutputTokens: 4096 },
       },
     ],
@@ -101,87 +125,54 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.8, maxOutputTokens: 4096 },
     }],
   },
+  // Structured JSON extraction tasks: thinkingBudget=0 disables reasoning so the
+  // full output budget goes to the JSON payload, not chain-of-thought tokens.
   'pipeline.enrichment': {
     primary: {
       provider: 'workers-ai',
       model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.2, maxOutputTokens: 4096 },
+      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
     },
     fallbacks: [{
       provider: 'gemini',
       model: 'gemini-2.5-flash',
-      options: { temperature: 0.2, maxOutputTokens: 2048 },
+      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
     }],
-  },
-  // Single-purpose chunk summary for backfill. Workers-AI-only chain per the
-  // "Workers AI primary, Workers AI fallback" rule for new call sites.
-  // Returns plain text (no JSON wrapper), short outputs.
-  // chunk.summary uses a dual-path scheme inside BulkSummarizeWorkflow:
-  //   - chunks <= 3000 chars: BART (@cf/facebook/bart-large-cnn) called
-  //     directly via env.AI.run() because it uses the Summarization task
-  //     type ({ input_text, max_length }), not chat completions. Free, fast,
-  //     no thinking. Workflow-only exception to the "no raw env.AI.run" rule.
-  //   - chunks > 3000 chars: GLM-4.7-Flash via the chat completions API
-  //     and the provider abstraction below.
-  // The registry entry only describes the GLM path so callWithFallback
-  // dispatches correctly. BART routing is a workflow-internal detail.
-  'chunk.summary': {
-    primary: {
-      provider: 'workers-ai',
-      model: '@cf/zai-org/glm-4.7-flash',
-      options: { temperature: 0.2, maxOutputTokens: 256 },
-    },
-    fallbacks: [],
   },
   'pipeline.vocabulary': {
     primary: {
       provider: 'workers-ai',
       model: '@cf/ibm-granite/granite-4.0-h-micro',
-      options: { temperature: 0.1, maxOutputTokens: 1024 },
+      options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
     },
     fallbacks: [{
       provider: 'gemini',
       model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 1024 },
+      options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
     }],
   },
   'pipeline.indexing': {
     primary: {
       provider: 'workers-ai',
       model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.1, maxOutputTokens: 4096 },
+      options: { temperature: 0.1, maxOutputTokens: 4096, thinkingBudget: 0 },
     },
     fallbacks: [{
       provider: 'gemini',
       model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 4096 },
+      options: { temperature: 0.1, maxOutputTokens: 4096, thinkingBudget: 0 },
     }],
   },
   'pipeline.correspondence': {
     primary: {
       provider: 'workers-ai',
       model: '@cf/ibm-granite/granite-4.0-h-micro',
-      options: { temperature: 0.1, maxOutputTokens: 2048 },
+      options: { temperature: 0.1, maxOutputTokens: 2048, thinkingBudget: 0 },
     },
     fallbacks: [{
       provider: 'gemini',
       model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 2048 },
-    }],
-  },
-
-  // Moodboard aggregation: N per-image IRs -> one aggregate IR with invariants/vectors/low_freq buckets.
-  // Workers-AI-only chain by design. On total failure, caller leaves moodboard row in 'extracted' and retries later.
-  'moodboard.aggregate': {
-    primary: {
-      provider: 'workers-ai',
-      model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.3, maxOutputTokens: 4096, responseFormat: 'json' },
-    },
-    fallbacks: [{
-      provider: 'workers-ai',
-      model: '@cf/nvidia/nemotron-3-120b-a12b',
-      options: { temperature: 0.3, maxOutputTokens: 4096, responseFormat: 'json' },
+      options: { temperature: 0.1, maxOutputTokens: 2048, thinkingBudget: 0 },
     }],
   },
 

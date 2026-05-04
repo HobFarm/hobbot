@@ -10,6 +10,7 @@ export interface AIRequest {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: 'text' | 'json';
+  thinkingBudget?: number;  // 0 = disable thinking; undefined = provider default
 }
 
 export interface AIUsage {
