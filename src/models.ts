@@ -91,7 +91,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
     primary: {
       provider: 'xai',
       model: 'grok-4.3',
-      options: { temperature: 0.1, maxOutputTokens: 4096 },
+      // 8192 absorbs Grok's reasoning + dense catalog output (10+ items with
+      // brand/price/materials + body translation) without truncation.
+      options: { temperature: 0.1, maxOutputTokens: 8192 },
     },
     fallbacks: [
       {
@@ -127,6 +129,11 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   },
   // Structured JSON extraction tasks: thinkingBudget=0 disables reasoning so the
   // full output budget goes to the JSON payload, not chain-of-thought tokens.
+  // Fallbacks moved from Gemini to Workers AI on 2026-05-04 to satisfy the
+  // global "Workers AI primary + Workers AI fallback" rule. glm-4.7-flash is a
+  // different family from Qwen3/Granite (ZAI vs Alibaba/IBM), so a primary
+  // failure mode is unlikely to repeat on fallback. 131K context handles long
+  // wiki sections without truncation.
   'pipeline.enrichment': {
     primary: {
       provider: 'workers-ai',
@@ -134,9 +141,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
-      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
+      provider: 'workers-ai',
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.2, maxOutputTokens: 4096, responseFormat: 'json' },
     }],
   },
   'pipeline.vocabulary': {
@@ -146,9 +153,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
+      provider: 'workers-ai',
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.1, maxOutputTokens: 1024, responseFormat: 'json' },
     }],
   },
   'pipeline.indexing': {
@@ -158,9 +165,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.1, maxOutputTokens: 4096, thinkingBudget: 0 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 4096, thinkingBudget: 0 },
+      provider: 'workers-ai',
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.1, maxOutputTokens: 4096, responseFormat: 'json' },
     }],
   },
   'pipeline.correspondence': {
@@ -170,9 +177,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.1, maxOutputTokens: 2048, thinkingBudget: 0 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
-      options: { temperature: 0.1, maxOutputTokens: 2048, thinkingBudget: 0 },
+      provider: 'workers-ai',
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.1, maxOutputTokens: 2048, responseFormat: 'json' },
     }],
   },
 
@@ -368,7 +375,7 @@ export const AVAILABLE_WORKERS_AI: Record<string, WorkersAIModelInfo> = {
     model: '@cf/zai-org/glm-4.7-flash',
     context: 131000,
     functionCalling: true,
-    notes: '131K context, function calling, Workers AI native. Potential chat fallback.',
+    notes: '131K context, function calling, Workers AI native. In use as fallback for pipeline.{enrichment,vocabulary,indexing,correspondence} since 2026-05-04.',
   },
   'bart-large-cnn': {
     model: '@cf/facebook/bart-large-cnn',

@@ -72,7 +72,13 @@ export async function listDocuments(
   const parts: string[] = []
   const binds: unknown[] = []
 
-  if (opts.status) { parts.push('status = ?'); binds.push(opts.status) }
+  if (opts.status) {
+    parts.push('status = ?')
+    binds.push(opts.status)
+  } else {
+    // Hide superseded versions by default; callers that want them must ask explicitly.
+    parts.push("status != 'superseded'")
+  }
   if (opts.mime_type) { parts.push('mime_type = ?'); binds.push(opts.mime_type) }
   if (opts.source_app) { parts.push('source_app = ?'); binds.push(opts.source_app) }
 
@@ -126,7 +132,9 @@ export async function searchChunks(
   opts: { category?: string; arrangement?: string; document_id?: string; limit?: number } = {}
 ): Promise<ChunkSearchResult[]> {
   const limit = Math.min(opts.limit ?? QUERY.DEFAULT_SEARCH_LIMIT, QUERY.MAX_SEARCH_LIMIT)
-  const parts: string[] = ["c.content LIKE '%' || ? || '%'"]
+  // Always exclude chunks belonging to superseded document versions; the join is
+  // needed for document_title anyway, so the filter is a clean WHERE addition.
+  const parts: string[] = ["c.content LIKE '%' || ? || '%'", "d.status != 'superseded'"]
   const binds: unknown[] = [query.toLowerCase()]
   const joins: string[] = ['JOIN documents d ON c.document_id = d.id']
 

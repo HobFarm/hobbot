@@ -169,7 +169,6 @@ export function registerAdminTools(server: McpServer, env: Env) {
         { worker: 'hobbot-pipeline', schedule: '0 8 * * *', description: 'Blog compose pipeline' },
         { worker: 'hobbot-custodian', schedule: '0 */6 * * *', description: 'Integrity scan, RSS harvest, conductor, archive-org agent' },
         { worker: 'hobbot-custodian', schedule: '0 0 * * 1', description: 'Evolve report (Monday midnight)' },
-        { worker: 'hobbot-custodian', schedule: '0 2 * * 1', description: 'Getty AAT harvest + correspondences (Monday 2am)' },
         { worker: 'hobbot-custodian', schedule: '0 3 * * 3', description: 'Wikidata harvest + correspondences (Wednesday 3am)' },
         { worker: 'hobbot-chat', schedule: '0 4 * * *', description: 'Session purge (30 day retention)' },
       ]
