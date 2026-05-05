@@ -22,6 +22,17 @@ function errText(data: unknown): McpResult {
   return { ...text(data), isError: true }
 }
 
+/** Resolve SERVICE_TOKENS from Secrets Store binding, return the bare secret. */
+async function resolveLineageServiceSecret(env: Env): Promise<string> {
+  const raw = env.SERVICE_TOKENS as unknown
+  const tokenList = (raw && typeof raw === 'object' && 'get' in raw && typeof (raw as { get: unknown }).get === 'function')
+    ? await (raw as { get: () => Promise<string> }).get() ?? ''
+    : (raw as string) ?? ''
+  const firstPair = tokenList.split(',')[0]?.trim() ?? ''
+  const colonIdx = firstPair.indexOf(':')
+  return colonIdx >= 1 ? firstPair.slice(colonIdx + 1).trim() : firstPair
+}
+
 export function createGrimoireMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: 'Grimoire', version: '1.0.0' })
   const handle = createGrimoireHandle(env.GRIMOIRE_DB)
@@ -431,6 +442,46 @@ export function createGrimoireMcpServer(env: Env): McpServer {
         return text(result)
       } catch (err) {
         return errText({ error: 'log_behavior_failed', message: (err as Error).message })
+      }
+    },
+  )
+
+  // --- Arrangement Lineage ---
+  // Conversational authoring path: assistant traces a lineage during chat,
+  // calls this tool to land a proposal in arrangement_relation_proposals.
+  // Edges are NOT auto-applied — they wait in the proposal queue for human
+  // review via /admin/lineage/proposals/:id/{accept,reject}.
+
+  server.tool(
+    'grimoire_propose_arrangement_lineage',
+    'Propose a lineage edge between two arrangements (e.g. gothic-lolita evolved_from visual-kei). Lands in the proposal queue for human review; does not auto-apply. Use when tracing aesthetic/cultural lineage in conversation. Slugs must already exist in the arrangements table; self-edges rejected.',
+    {
+      source_slug: z.string().describe('Source arrangement slug (e.g. "gothic-lolita")'),
+      target_slug: z.string().describe('Target arrangement slug — what the source descends from / relates to'),
+      type: z.enum(['influenced_by', 'evolved_from', 'parodies', 'inverts', 'sibling_of'])
+        .describe('Relationship type. evolved_from = direct descent; influenced_by = absorbed elements; parodies = mockingly references; inverts = systematic opposition; sibling_of = shared ancestor, no direct lineage'),
+      confidence: z.number().min(0).max(1).optional().default(0.7)
+        .describe('Confidence in this edge (0-1). Default 0.7 for chat-authored proposals.'),
+      notes: z.string().optional().describe('Rationale: why this relationship holds, key evidence, transmission mechanism'),
+      via_evidence: z.unknown().optional().describe('Free-form JSON for evidence: {atom_ids: [...]}, {citations: [...]}, {chat_session_id: "..."}, etc.'),
+    },
+    async ({ source_slug, target_slug, type, confidence, notes, via_evidence }) => {
+      try {
+        const grimoire = env.GRIMOIRE as unknown as Fetcher
+        const token = await resolveLineageServiceSecret(env)
+        const res = await grimoire.fetch('https://grimoire/admin/lineage/propose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            source_slug, target_slug, type, confidence, notes, via_evidence,
+            source: 'chat',
+          }),
+        })
+        const body = await res.json<{ id?: number; status?: string; error?: string; message?: string }>()
+        if (!res.ok) return errText({ error: body.error ?? 'propose_failed', message: body.message ?? `HTTP ${res.status}` })
+        return text(body)
+      } catch (err) {
+        return errText({ error: 'propose_lineage_failed', message: (err as Error).message })
       }
     },
   )

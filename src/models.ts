@@ -15,6 +15,7 @@ export type TaskType =
   | 'custodian.intent'          // Gap -> search intent (Nemotron)
   | 'custodian.queries'         // Intent -> IA queries (Qwen3)
   | 'custodian.score'           // Candidate -> relevance score (Granite)
+  | 'lineage.discover'          // Orphan arrangement -> proposed lineage edges (Qwen3 primary, GLM fallback)
   // Chat tasks (moved from config.ts CHAT constants)
   | 'chat.primary'              // Primary chat model (gpt-oss-120b)
   | 'chat.fallback'             // Workers AI fallback (Qwen3)
@@ -222,6 +223,25 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       provider: 'gemini',
       model: 'gemini-2.5-flash',
       options: { temperature: 0.1, maxOutputTokens: 128 },
+    }],
+  },
+
+  // --- Lineage gap discovery ---
+  // Given an orphan arrangement (no inbound or outbound lineage edges), the
+  // model proposes up to 5 relationships from the existing arrangement list.
+  // Cultural-history reasoning task; ~70 candidate slugs as context. Workers AI
+  // primary + Workers AI fallback per global rule. ZAI/Alibaba family split
+  // matches the pipeline.* pattern.
+  'lineage.discover': {
+    primary: {
+      provider: 'workers-ai',
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
+      options: { temperature: 0.2, maxOutputTokens: 1024, thinkingBudget: 0 },
+    },
+    fallbacks: [{
+      provider: 'workers-ai',
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.2, maxOutputTokens: 1024, responseFormat: 'json' },
     }],
   },
 
