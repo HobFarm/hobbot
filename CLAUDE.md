@@ -4,11 +4,15 @@
 >
 > `HobBot/` is a separate git repository nested inside the grimoire tree (own `.git`, excluded from grimoire `.gitignore`, **not** included in grimoire git worktrees). Builds for any `hobbot-*` worker fail in worktrees because `@shared/*` resolves to `../../HobBot/src/*`. Always work from the main checkout.
 
+**LAST_UPDATED:** 2026-05-08. If more than seven days old, treat specific claims as suspect — see [Stale Instruction Policy](../CLAUDE.md#stale-instruction-policy).
+
 ## What This Worker Does
 
 API surface for the entire HobBot swarm. Serves MCP tools, HTTP API routes, and delegates heavy operations to child workers via Cloudflare Service Bindings (zero-cost, same-thread RPC). Also serves the MCP endpoint that claude.ai connects to.
 
-The gateway has NO crons, NO AI providers, NO R2. Pure routing layer.
+The gateway has no AI providers and no R2. Its only cron is a daily 3am UTC retention cleanup on HOBBOT_DB tables it owns (`tool_executions`, `hobbot_actions`, `token_usage`); see the `scheduled()` handler in [src/index.ts](src/index.ts). Pure routing otherwise.
+
+**Plasticity substrate posture.** The gateway is a read-only consumer of the plasticity substrate. It never invokes `reinforcePair`, `reinforceFromDiscovery`, or `buildInsertWithContribution` — all `correspondences` mutation goes through the grimoire worker via the `GRIMOIRE` service binding. See the [Write-Path Registry](../CLAUDE.md#write-path-registry) in the root CLAUDE.md.
 
 ## Worker Bindings
 
@@ -37,7 +41,8 @@ Verify against `wrangler.toml` before making changes.
 ```
 hobbot-worker (THIS WORKER - gateway)
   MCP server, HTTP API, newsletter
-  No crons, no AI, no R2
+  Cron: 0 3 * * * (daily 3am UTC HOBBOT_DB retention cleanup)
+  No AI, no R2
   │
   ├── hobbot-chat (Service Binding: HOBBOT_CHAT, fetch proxy)
   │     Chat backend, Anthropic Claude, session cookie auth
@@ -246,7 +251,7 @@ Imported by every worker via `@shared/*` tsconfig path alias (`paths: { "@shared
 ### Code Rules
 
 - No AI calls in the gateway. Delegate to child workers.
-- No crons. All scheduled work runs on child workers.
+- No new crons. The single existing cron (3am UTC retention cleanup on gateway-owned HOBBOT_DB tables) is intentional; all *other* scheduled work belongs on child workers.
 - No R2 operations. Pipeline worker owns R2.
 - MCP tools that need AI must delegate via RPC, not add AI bindings here.
 - Service token auth for admin endpoints (src/api/auth.ts)
@@ -264,7 +269,7 @@ For current state, run `ls HobBot/migrations/hobbot/` and query the remote `d1_m
 
 ### What NOT To Do
 
-- Do not add crons to this worker
+- Do not add new crons to this worker. The single existing 3am UTC retention cleanup is intentional; new scheduled work belongs on child workers.
 - Do not add AI, R2, Gemini, or Anthropic bindings
 - Do not import from child worker source directories (blog/, chat/, harvesters/, agents/)
 - Do not write to GRIMOIRE_DB except through grimoire/ingest.ts for atom-level operations
