@@ -261,7 +261,7 @@ Imported by every worker via `@shared/*` tsconfig path alias (`paths: { "@shared
 
 ### D1 Migrations
 
-HobBot writes to `hobbot-db` (binding `HOBBOT_DB`), with migrations at `HobBot/migrations/hobbot/`. Apply via `npx wrangler d1 migrations apply hobbot-db --remote` from the `HobBot/` directory.
+HobBot writes to `hobbot-db` (binding `HOBBOT_DB`), with migrations at `HobBot/migrations/hobbot/`. Production apply uses `npx wrangler d1 migrations apply hobbot-db --remote` from the `HobBot/` directory and requires explicit user approval for that database and migration set.
 
 **Rules are identical to the grimoire worker.** See [workers/grimoire/CLAUDE.md](../workers/grimoire/CLAUDE.md) "D1 Migrations" section for the full list (idempotent migrations, never use `--command/--file` for schema, sequential numbering, table-rebuild pattern for CHECK changes, manual-apply requires immediate `INSERT INTO d1_migrations`). The cross-cutting Migration Safety Rules in the [root CLAUDE.md](../CLAUDE.md) also apply.
 
@@ -284,7 +284,9 @@ npm run build
 npx wrangler deploy
 ```
 
-The cross-cutting Deploy Rules live in the [root CLAUDE.md](../CLAUDE.md#deploy-rules) — read those first (they cover deploy order, the worktree warning, the git-status precheck, the `git diff --name-only` rule, and the post-task commit requirement).
+`npm run build` is the normal validation command. `npx wrangler deploy` mutates production and requires explicit user approval for this worker and current diff.
+
+The cross-cutting Deploy Rules live in the [root CLAUDE.md](../CLAUDE.md#deploy-rules) — read those first (they cover deploy order, the worktree warning, the git-status precheck, and the `git diff --name-only` rule).
 
 After deploying, verify:
 - Health endpoint returns OK: `curl https://hobbot-worker.damp-violet-bf89.workers.dev/`
