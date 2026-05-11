@@ -275,20 +275,37 @@ export const MODELS: Record<TaskType, TaskConfig> = {
     },
     fallbacks: [],
   },
-  // Conversation history summarization. BART is a purpose-built summarization
-  // model with a different API surface than chat models: it takes
-  // { input_text, max_length } and returns { summary }, NOT a messages array.
-  // Called directly via env.AI.run() in workers/hobbot-chat/src/services/summarize.ts.
-  // The registry entry exists so the model string is centralized; the dispatch
-  // is workflow-internal because callWithFallback's chat-completions assumption
-  // doesn't apply. On BART failure, summarize.ts falls back to message
-  // truncation in-process (no model-level fallback needed).
+  // Conversation history summarization. BART removed 2026-05-10 (Cloudflare
+  // planned deprecation). Now uses chat-completions shape via WorkersAIProvider
+  // in workers/hobbot-chat/src/services/summarize.ts. Plain text output (no
+  // JSON wrapper); the service trims and clips defensively before persisting.
+  //
+  // Primary: llama-3.3-70b-instruct-fp8-fast @ 512 tokens — non-thinking,
+  // already proven elsewhere in the registry (agent.compose fallback,
+  // chunk.summary primary on the grimoire worker as of 2026-05-10), reliable
+  // text output. 512 tokens gives headroom for a multi-sentence digest of
+  // an old-message batch. Qwen3 retained as fallback at 4096 tokens (absorbs
+  // its <think> block so the budget is never eaten before the answer); on
+  // Qwen3 fallback the consumer must strip <think>...</think> blocks before
+  // persisting. Nemotron as last-resort fallback.
   'chat.summarize': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/facebook/bart-large-cnn',
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      options: { temperature: 0.2, maxOutputTokens: 512 },
     },
-    fallbacks: [],
+    fallbacks: [
+      {
+        provider: 'workers-ai',
+        model: '@cf/qwen/qwen3-30b-a3b-fp8',
+        options: { temperature: 0.2, maxOutputTokens: 4096 },
+      },
+      {
+        provider: 'workers-ai',
+        model: '@cf/nvidia/nemotron-3-120b-a12b',
+        options: { temperature: 0.2, maxOutputTokens: 512 },
+      },
+    ],
   },
 
   // --- Classifier tasks (moved from workers/grimoire-classifier/src/ai.ts) ---
@@ -401,7 +418,7 @@ export const AVAILABLE_WORKERS_AI: Record<string, WorkersAIModelInfo> = {
     model: '@cf/facebook/bart-large-cnn',
     context: 1024,
     functionCalling: false,
-    notes: 'Purpose-built summarization model. Candidate for chat history summarization (Phase 4).',
+    notes: 'DEPRECATED 2026-05-10 (Cloudflare planned deprecation list). Was used for chat history + chunk summarization; both migrated to chat-completions models (llama-3.3-fp8-fast primary). Entry retained for catalog reference; do not assign to new tasks.',
   },
   'detr-resnet-50': {
     model: '@cf/facebook/detr-resnet-50',
