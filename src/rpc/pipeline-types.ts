@@ -21,7 +21,10 @@ export interface ContentBlock {
 }
 
 export interface DocumentProvenance {
-  adapter: 'url' | 'text' | 'text-url' | 'text-r2' | 'image' | 'feed_entry' | 'pdf' | 'reddit'
+  // Step 4D: 'html' added for the R2-event-driven HTML adapter
+  // (workers/hobbot-pipeline/src/adapters/from-html.ts). Mirrors text-r2's
+  // ingest-log retry-safe pattern; uses HTMLRewriter for content extraction.
+  adapter: 'url' | 'text' | 'text-url' | 'text-r2' | 'image' | 'feed_entry' | 'pdf' | 'reddit' | 'html'
   fetched_at?: string
   ingested_at?: string
   original_url?: string
