@@ -230,18 +230,29 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   // Given an orphan arrangement (no inbound or outbound lineage edges), the
   // model proposes up to 5 relationships from the existing arrangement list.
   // Cultural-history reasoning task; ~70 candidate slugs as context. Workers AI
-  // primary + Workers AI fallback per global rule. ZAI/Alibaba family split
-  // matches the pipeline.* pattern.
+  // primary + Workers AI fallback per global rule.
+  //
+  // Audit Slice 4 promotion (2026-05-13, Step 3D canary): GLM-4.7-Flash
+  // promoted from fallback to primary; Qwen3-30b moved to fallback. Canary
+  // task for the broader pipeline.* promotion; lowest-traffic site (fires only
+  // on orphan-arrangement detection in custodian's 6h cron, not per-chunk).
+  // Revert is a one-commit registry flip if GLM quality regresses.
+  // Caveat: WorkersAIProvider.generateResponse does NOT forward responseFormat
+  // to env.AI.run (see HobBot/src/providers/workers-ai.ts), so the
+  // `responseFormat: 'json'` option is descriptive metadata — JSON-mode
+  // enforcement comes from prompt engineering, not the provider call.
+  // GLM-4.7-Flash has been firing in the fallback slot under this same
+  // constraint; promotion to primary changes which path is the default attempt.
   'lineage.discover': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.2, maxOutputTokens: 1024, thinkingBudget: 0 },
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.2, maxOutputTokens: 1024, responseFormat: 'json' },
     },
     fallbacks: [{
       provider: 'workers-ai',
-      model: '@cf/zai-org/glm-4.7-flash',
-      options: { temperature: 0.2, maxOutputTokens: 1024, responseFormat: 'json' },
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
+      options: { temperature: 0.2, maxOutputTokens: 1024, thinkingBudget: 0 },
     }],
   },
 
