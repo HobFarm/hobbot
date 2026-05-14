@@ -135,52 +135,77 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   // different family from Qwen3/Granite (ZAI vs Alibaba/IBM), so a primary
   // failure mode is unlikely to repeat on fallback. 131K context handles long
   // wiki sections without truncation.
+  // Audit Slice 4 rollout task 3 (2026-05-14): GLM-4.7-Flash promoted from
+  // fallback to primary; Qwen3-30b moved to fallback. Justified by data — over
+  // the prior 3 days Qwen3 succeeded 8 times vs GLM-fallback succeeding 18
+  // times on this task key (69% fallback firing rate), meaning Qwen3 primary
+  // was silently failing on most attempts and GLM was already the de facto
+  // primary. Promotion makes the effective behavior the official behavior.
+  // Revert is a one-commit flip.
   'pipeline.enrichment': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.2, maxOutputTokens: 4096, responseFormat: 'json' },
     },
     fallbacks: [{
       provider: 'workers-ai',
-      model: '@cf/zai-org/glm-4.7-flash',
-      options: { temperature: 0.2, maxOutputTokens: 4096, responseFormat: 'json' },
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
+      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
     }],
   },
+  // Audit Slice 4 rollout (2026-05-14, follows lineage.discover Step-3D canary):
+  // GLM-4.7-Flash promoted from fallback to primary; Granite Micro moved to
+  // fallback. Post-promotion lineage.discover canary showed 6.7% fallback
+  // firing rate (1 Qwen3 fallback vs 14 GLM successes), well under the 20%
+  // tripwire. First pipeline.* key in the rollout (lowest-risk: bounded JSON,
+  // per-batch vocab match, easy to revert via one-commit registry flip).
   'pipeline.vocabulary': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/ibm-granite/granite-4.0-h-micro',
-      options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.1, maxOutputTokens: 1024, responseFormat: 'json' },
     },
     fallbacks: [{
       provider: 'workers-ai',
-      model: '@cf/zai-org/glm-4.7-flash',
-      options: { temperature: 0.1, maxOutputTokens: 1024, responseFormat: 'json' },
+      model: '@cf/ibm-granite/granite-4.0-h-micro',
+      options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
     }],
   },
+  // Audit Slice 4 rollout task 4 (2026-05-14): GLM-4.7-Flash promoted to
+  // primary; Qwen3-30b moved to fallback. Sparse observed traffic (only 1
+  // fallback firing in the past 3 days), but the same Qwen3-fails-silently
+  // pattern showed up here as on pipeline.enrichment. Promotion is symmetric
+  // with the other Qwen3-based task keys. Revert is a one-commit flip.
   'pipeline.indexing': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.1, maxOutputTokens: 4096, thinkingBudget: 0 },
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.1, maxOutputTokens: 4096, responseFormat: 'json' },
     },
     fallbacks: [{
       provider: 'workers-ai',
-      model: '@cf/zai-org/glm-4.7-flash',
-      options: { temperature: 0.1, maxOutputTokens: 4096, responseFormat: 'json' },
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
+      options: { temperature: 0.1, maxOutputTokens: 4096, thinkingBudget: 0 },
     }],
   },
+  // Audit Slice 4 rollout task 2 (2026-05-14, follows pipeline.vocabulary):
+  // GLM-4.7-Flash promoted from fallback to primary; Granite Micro moved to
+  // fallback. Same shape as task 1 (pipeline.vocabulary); both promoted in
+  // the same operator session given lineage.discover canary (6.7% fallback)
+  // plus the Qwen3-silent-failure pattern found on pipeline.enrichment which
+  // strengthens the GLM-as-primary case across pipeline.*. Revert is a
+  // one-commit flip.
   'pipeline.correspondence': {
     primary: {
       provider: 'workers-ai',
-      model: '@cf/ibm-granite/granite-4.0-h-micro',
-      options: { temperature: 0.1, maxOutputTokens: 2048, thinkingBudget: 0 },
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.1, maxOutputTokens: 2048, responseFormat: 'json' },
     },
     fallbacks: [{
       provider: 'workers-ai',
-      model: '@cf/zai-org/glm-4.7-flash',
-      options: { temperature: 0.1, maxOutputTokens: 2048, responseFormat: 'json' },
+      model: '@cf/ibm-granite/granite-4.0-h-micro',
+      options: { temperature: 0.1, maxOutputTokens: 2048, thinkingBudget: 0 },
     }],
   },
 
