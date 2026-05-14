@@ -3,7 +3,7 @@
 export type TaskType =
   | 'validate.duplicate'        // AI duplicate check
   | 'image.analyze'             // Vision classification (Workers AI primary, Gemini fallback)
-  | 'image.analyze.curated'     // Curated R2 ingest vision (Grok 4.3 primary, Gemini fallback). Reads brand text + translates non-English body copy.
+  | 'image.analyze.curated'     // Curated R2 ingest vision (Kimi K2.6 on Workers AI). Reads brand text + translates non-English body copy.
   | 'knowledge.extract'         // knowledge ingest extraction (legacy, kept for backward compat)
   | 'blog.compose'              // blog post generation (Nemotron primary, Gemini fallback)
   | 'pipeline.enrichment'       // per-chunk enrichment: summary, categories, arrangements, concepts (also used by cron safety net)
@@ -82,32 +82,20 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       },
     ],
   },
-  // Curated ingest path: Grok 4.3 reads brand text and translates Japanese body
-  // copy (A/B-validated against Scout: 12 vs 5 items, 100% vs 0% brand attribution).
-  // External provider justified at the primary because no Workers AI vision model
-  // currently matches Grok's OCR + translation depth on Japanese catalogs.
-  // Fallback chain is all Workers AI per the global rule: Mistral Small 3.1 (different
-  // vision family) then Llama 4 Scout (last-resort, known weaker on this content).
+  // Curated ingest path: Kimi K2.6 on Workers AI. Phase 4.5 Step D makes this
+  // a clean cut from Grok: no external xAI call and no silent fallback, so GLB
+  // batch validation sees Kimi failures directly instead of masking them behind
+  // lower-quality extraction from the old chain.
   'image.analyze.curated': {
     primary: {
-      provider: 'xai',
-      model: 'grok-4.3',
-      // 8192 absorbs Grok's reasoning + dense catalog output (10+ items with
-      // brand/price/materials + body translation) without truncation.
-      options: { temperature: 0.1, maxOutputTokens: 8192 },
+      provider: 'workers-ai',
+      model: '@cf/moonshotai/kimi-k2.6',
+      // Dense catalog pages can produce long enumerated_items arrays plus body
+      // translations. Keep the larger output budget validated during the Kimi
+      // canary rather than falling back to the standard vision budget.
+      options: { temperature: 0.1, maxOutputTokens: 8192, responseFormat: 'json' },
     },
-    fallbacks: [
-      {
-        provider: 'workers-ai',
-        model: '@cf/mistralai/mistral-small-3.1-24b-instruct',
-        options: { temperature: 0.1, maxOutputTokens: 4096 },
-      },
-      {
-        provider: 'workers-ai',
-        model: '@cf/meta/llama-4-scout-17b-16e-instruct',
-        options: { temperature: 0.1, maxOutputTokens: 4096 },
-      },
-    ],
+    fallbacks: [],
   },
   'knowledge.extract': {
     primary: {
