@@ -3,7 +3,7 @@
 export type TaskType =
   | 'validate.duplicate'        // AI duplicate check
   | 'image.analyze'             // Vision classification (Workers AI primary, Gemini fallback)
-  | 'image.analyze.curated'     // Curated R2 ingest vision (Kimi K2.6 on Workers AI). Reads brand text + translates non-English body copy.
+  | 'image.analyze.curated'     // Curated R2 ingest vision (Kimi K2.6 with Gemma fallback). Reads brand text + translates non-English body copy.
   | 'knowledge.extract'         // knowledge ingest extraction (legacy, kept for backward compat)
   | 'blog.compose'              // blog post generation (Nemotron primary, Gemini fallback)
   | 'pipeline.enrichment'       // per-chunk enrichment: summary, categories, arrangements, concepts (also used by cron safety net)
@@ -83,9 +83,11 @@ export const MODELS: Record<TaskType, TaskConfig> = {
     ],
   },
   // Curated ingest path: Kimi K2.6 on Workers AI. Phase 4.5 Step D makes this
-  // a clean cut from Grok: no external xAI call and no silent fallback, so GLB
-  // batch validation sees Kimi failures directly instead of masking them behind
-  // lower-quality extraction from the old chain.
+  // a clean cut from Grok/xAI while retaining a Workers AI fallback for
+  // operational resilience. Gemma 4 26B A4B is the fallback because its
+  // Workers AI model card calls out multilingual OCR/document understanding,
+  // which matches Japanese-heavy catalog/reference scans better than the
+  // standard Scout/Mistral chain.
   'image.analyze.curated': {
     primary: {
       provider: 'workers-ai',
@@ -95,7 +97,13 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       // canary rather than falling back to the standard vision budget.
       options: { temperature: 0.1, maxOutputTokens: 8192, responseFormat: 'json' },
     },
-    fallbacks: [],
+    fallbacks: [
+      {
+        provider: 'workers-ai',
+        model: '@cf/google/gemma-4-26b-a4b-it',
+        options: { temperature: 0.1, maxOutputTokens: 8192, responseFormat: 'json' },
+      },
+    ],
   },
   'knowledge.extract': {
     primary: {

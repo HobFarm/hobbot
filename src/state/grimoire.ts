@@ -32,6 +32,10 @@ function sanitizeFtsQuery(query: string): string {
     .trim()
 }
 
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`)
+}
+
 async function ftsSearch(
   db: D1Database,
   query: string,
@@ -75,8 +79,9 @@ export async function searchAtoms(
   }
 
   const limit = Math.min(opts.limit ?? QUERY.DEFAULT_SEARCH_LIMIT, QUERY.MAX_SEARCH_LIMIT)
-  const parts: string[] = ["text_lower LIKE '%' || ? || '%'"]
-  const binds: unknown[] = [query.toLowerCase()]
+  const likePattern = `%${escapeLikePattern(query.toLowerCase())}%`
+  const parts: string[] = ["text_lower LIKE ? ESCAPE '\\'"]
+  const binds: unknown[] = [likePattern]
 
   if (opts.category) { parts.push('category_slug = ?'); binds.push(opts.category) }
   if (opts.collection) { parts.push('collection_slug = ?'); binds.push(opts.collection) }
@@ -136,12 +141,12 @@ export async function getRecommendations(
     console.warn('[recommend] FTS5 failed, falling back to LIKE:', e)
   }
 
-  const intentLower = intent.toLowerCase()
+  const likePattern = `%${escapeLikePattern(intent.toLowerCase())}%`
   const result = await db.prepare(
     `SELECT * FROM atoms WHERE category_slug IN (${placeholders})
-     AND text_lower LIKE '%' || ? || '%' AND status != 'rejected'
+     AND text_lower LIKE ? ESCAPE '\\' AND status != 'rejected'
      ORDER BY confidence DESC LIMIT ?`
-  ).bind(...topCategories, intentLower, QUERY.DEFAULT_SEARCH_LIMIT).all<AtomRow>()
+  ).bind(...topCategories, likePattern, QUERY.DEFAULT_SEARCH_LIMIT).all<AtomRow>()
 
   const atoms = (result.results ?? []).map(fromRow)
   return atoms.length > 0 ? atoms : searchAtoms(db, intent, { limit: QUERY.DEFAULT_SEARCH_LIMIT })

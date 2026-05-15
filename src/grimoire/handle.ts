@@ -247,8 +247,8 @@ export function createGrimoireHandle(db: D1Database): GrimoireHandle {
       atoms_skipped?: number
       relations_created?: number
       extraction_json?: Record<string, unknown>
-      error_message?: string
-      completed_at?: string
+      error_message?: string | null
+      completed_at?: string | null
       source_id?: string
       document_id?: string
       chunks_created?: number
