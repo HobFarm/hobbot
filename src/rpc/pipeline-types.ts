@@ -35,6 +35,13 @@ export interface DocumentProvenance {
   collection_slug?: string
   arrangement_hints?: string[]
   bibliography_detected?: boolean
+  // Image-only optional fields. Populated by from-image when the vision model
+  // returns the page_type taxonomy / sections array. Consumed by the pipeline
+  // orchestrator when building the image_completion marker. Non-image adapters
+  // never set these.
+  image_page_type?: string
+  image_section_count?: number
+  image_section_labels?: string[]
   reddit?: {
     subreddit: string
     author: string
