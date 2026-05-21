@@ -137,11 +137,13 @@ export function registerAdminTools(server: McpServer, env: Env) {
         ORDER BY last_run DESC
       `).bind(hours).all()
 
-      // DLQ failures
+      // DLQ failures. failed_operations uses `failed_at` (the schema column),
+      // not `created_at`. Earlier versions of this query used `created_at` and
+      // tripped D1_ERROR: no such column.
       const dlqStats = await db.prepare(`
-        SELECT queue, count(*) as count, max(created_at) as latest
+        SELECT queue, count(*) as count, max(failed_at) as latest
         FROM failed_operations
-        WHERE created_at > datetime('now', '-' || ? || ' hours')
+        WHERE failed_at > datetime('now', '-' || ? || ' hours')
         GROUP BY queue
       `).bind(hours).all()
 
