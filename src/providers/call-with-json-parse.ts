@@ -4,6 +4,7 @@
 import { GeminiProvider } from './gemini'
 import { WorkersAIProvider } from './workers-ai'
 import type { ModelEntry, TaskConfig } from '../models'
+import type { AIUsage } from './types'
 
 // --- Types ---
 
@@ -27,6 +28,26 @@ export interface CallOptions {
   gateway?: GatewayConfig
   timeoutMs?: number
   onUsage?: (usage: TokenUsageReport) => void
+}
+
+function reportUsage(
+  options: CallOptions | undefined,
+  taskType: string,
+  model: string,
+  provider: string,
+  usage: AIUsage,
+): void {
+  if (!options?.onUsage) return
+  try {
+    options.onUsage({
+      taskType,
+      model,
+      provider,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCost: usage.estimatedCost,
+    })
+  } catch {}
 }
 
 // --- Circuit breaker (inline, avoids importing from worker-specific modules) ---
@@ -224,14 +245,16 @@ export async function callWithJsonParse<T>(
       temperature: primary.options?.temperature ?? 0.2,
       maxTokens: primary.options?.maxOutputTokens ?? 1024,
       ...(typeof primary.options?.thinkingBudget === 'number' ? { thinkingBudget: primary.options.thinkingBudget } : {}),
-      ...(primary.provider === 'gemini' ? { responseFormat: 'json' as const } : {}),
+      responseFormat: primary.provider === 'gemini'
+        ? 'json' as const
+        : primary.options?.responseFormat,
     }
 
     const resp1 = await withTimeout(provider.generateResponse(request), timeoutMs, `${taskType}:primary`)
+    reportUsage(options, taskType, primary.model, primary.provider, resp1.usage)
     const parsed1 = extractJson(resp1.content)
     if (parsed1 !== null) {
       if (options?.health) await recordSuccess(options.health, providerKey)
-      if (options?.onUsage) try { options.onUsage({ taskType, model: primary.model, provider: primary.provider, inputTokens: resp1.usage.inputTokens, outputTokens: resp1.usage.outputTokens, estimatedCost: resp1.usage.estimatedCost }) } catch {}
       return { result: parsed1 as T, modelUsed: primary.model }
     }
 
@@ -244,10 +267,10 @@ export async function callWithJsonParse<T>(
       ],
     }
     const resp2 = await withTimeout(provider.generateResponse(retryRequest), timeoutMs, `${taskType}:retry`)
+    reportUsage(options, taskType, primary.model, primary.provider, resp2.usage)
     const parsed2 = extractJson(resp2.content)
     if (parsed2 !== null) {
       if (options?.health) await recordSuccess(options.health, providerKey)
-      if (options?.onUsage) try { options.onUsage({ taskType, model: primary.model, provider: primary.provider, inputTokens: resp2.usage.inputTokens, outputTokens: resp2.usage.outputTokens, estimatedCost: resp2.usage.estimatedCost }) } catch {}
       return { result: parsed2 as T, modelUsed: primary.model + ':retry' }
     }
   } catch (e) {
@@ -304,10 +327,11 @@ async function attemptFallbacks<T>(
           temperature: fb.options?.temperature ?? 0.2,
           maxTokens: fb.options?.maxOutputTokens ?? 1024,
           ...(typeof fb.options?.thinkingBudget === 'number' ? { thinkingBudget: fb.options.thinkingBudget } : {}),
+          responseFormat: fb.options?.responseFormat,
         }), timeoutMs, `${taskType}:fallback:${fb.model}`)
         text = fbResp.content
-        // Fire usage callback for Workers AI fallback (Gemini fallback via gateway doesn't expose usage)
-        if (options?.onUsage) try { options.onUsage({ taskType, model: fb.model, provider: fb.provider, inputTokens: fbResp.usage.inputTokens, outputTokens: fbResp.usage.outputTokens, estimatedCost: fbResp.usage.estimatedCost }) } catch {}
+        // Gemini fallback via gateway doesn't expose usage; Workers AI does.
+        reportUsage(options, taskType, fb.model, fb.provider, fbResp.usage)
       }
 
       const parsed = extractJson(text)

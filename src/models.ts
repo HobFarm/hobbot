@@ -147,7 +147,7 @@ export const MODELS: Record<TaskType, TaskConfig> = {
     fallbacks: [{
       provider: 'workers-ai',
       model: '@cf/qwen/qwen3-30b-a3b-fp8',
-      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0 },
+      options: { temperature: 0.2, maxOutputTokens: 4096, thinkingBudget: 0, responseFormat: 'json' },
     }],
   },
   // Audit Slice 4 rollout (2026-05-14, follows lineage.discover Step-3D canary):
@@ -258,12 +258,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   // task for the broader pipeline.* promotion; lowest-traffic site (fires only
   // on orphan-arrangement detection in custodian's 6h cron, not per-chunk).
   // Revert is a one-commit registry flip if GLM quality regresses.
-  // Caveat: WorkersAIProvider.generateResponse does NOT forward responseFormat
-  // to env.AI.run (see HobBot/src/providers/workers-ai.ts), so the
-  // `responseFormat: 'json'` option is descriptive metadata — JSON-mode
-  // enforcement comes from prompt engineering, not the provider call.
-  // GLM-4.7-Flash has been firing in the fallback slot under this same
-  // constraint; promotion to primary changes which path is the default attempt.
+  // WorkersAIProvider forwards `responseFormat: 'json'` to Workers AI JSON
+  // mode. Prompt-level JSON instructions stay in place because JSON mode is
+  // a contract request, not a schema validator for complex task outputs.
   'lineage.discover': {
     primary: {
       provider: 'workers-ai',

@@ -25,6 +25,10 @@ export class WorkersAIProvider implements AIProvider {
       temperature: request.temperature ?? 0.2,
     }
 
+    if (request.responseFormat === 'json') {
+      runInput.response_format = { type: 'json_object' }
+    }
+
     // Disable thinking on Qwen3 chat-template models when budget=0.
     // Qwen3 honors enable_thinking via chat_template_options; other models ignore it.
     if (request.thinkingBudget === 0) {
@@ -39,11 +43,13 @@ export class WorkersAIProvider implements AIProvider {
     let content: string
     if (typeof result === 'object' && result !== null) {
       const r = result as Record<string, unknown>
-      if ('response' in r && typeof r.response === 'string') {
-        content = r.response
+      if ('response' in r) {
+        content = typeof r.response === 'string' ? r.response : JSON.stringify(r.response)
       } else if ('choices' in r && Array.isArray(r.choices) && r.choices.length > 0) {
-        const choice = r.choices[0] as { message?: { content?: string } }
-        content = choice?.message?.content ?? JSON.stringify(result)
+        const choice = r.choices[0] as { message?: { content?: unknown } }
+        content = typeof choice?.message?.content === 'string'
+          ? choice.message.content
+          : JSON.stringify(choice?.message?.content ?? result)
       } else {
         content = JSON.stringify(result)
       }
