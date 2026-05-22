@@ -27,19 +27,19 @@ export interface CallOptions {
   health?: KVNamespace
   gateway?: GatewayConfig
   timeoutMs?: number
-  onUsage?: (usage: TokenUsageReport) => void
+  onUsage?: (usage: TokenUsageReport) => void | Promise<void>
 }
 
-function reportUsage(
+async function reportUsage(
   options: CallOptions | undefined,
   taskType: string,
   model: string,
   provider: string,
   usage: AIUsage,
-): void {
+): Promise<void> {
   if (!options?.onUsage) return
   try {
-    options.onUsage({
+    await options.onUsage({
       taskType,
       model,
       provider,
@@ -47,7 +47,9 @@ function reportUsage(
       outputTokens: usage.outputTokens,
       estimatedCost: usage.estimatedCost,
     })
-  } catch {}
+  } catch (err) {
+    console.warn(`[callWithJsonParse] usage logging failed for ${taskType}/${model}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 // --- Circuit breaker (inline, avoids importing from worker-specific modules) ---
@@ -86,6 +88,7 @@ async function recordSuccess(kv: KVNamespace, providerKey: string): Promise<void
 // --- Timeout ---
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_FAILURE_DETAIL_CHARS = 180
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -94,6 +97,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
     ),
   ])
+}
+
+function formatAttemptFailure(label: string, reason: unknown): string {
+  const msg = reason instanceof Error ? reason.message : String(reason)
+  return `${label}:${msg.replace(/\s+/g, ' ').slice(0, MAX_FAILURE_DETAIL_CHARS)}`
 }
 
 // --- JSON extraction ---
@@ -110,22 +118,75 @@ function stripThinkBlocks(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
 }
 
+function removeTrailingCommas(text: string): string {
+  return text.replace(/,\s*([}\]])/g, '$1')
+}
+
+function parseJsonCandidate(text: string): unknown {
+  const stripped = stripFences(text.trim().replace(/^\uFEFF/, ''))
+  const candidates = [stripped]
+  const repaired = removeTrailingCommas(stripped)
+  if (repaired !== stripped) candidates.push(repaired)
+
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate) } catch {}
+  }
+  return null
+}
+
+function parseBalancedJson(text: string, openChar: '{' | '['): unknown {
+  const closeChar = openChar === '{' ? '}' : ']'
+
+  for (let start = text.indexOf(openChar); start >= 0; start = text.indexOf(openChar, start + 1)) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i]
+
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (ch === '\\') {
+          escaped = true
+        } else if (ch === '"') {
+          inString = false
+        }
+        continue
+      }
+
+      if (ch === '"') {
+        inString = true
+        continue
+      }
+      if (ch === openChar) {
+        depth++
+      } else if (ch === closeChar) {
+        depth--
+        if (depth === 0) {
+          const parsed = parseJsonCandidate(text.slice(start, i + 1))
+          if (parsed !== null) return parsed
+          break
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 export function extractJson(text: string): unknown {
-  const cleaned = stripThinkBlocks(text)
-  try { return JSON.parse(cleaned) } catch {}
-  const stripped = stripFences(cleaned)
-  try { return JSON.parse(stripped) } catch {}
-  const start = cleaned.indexOf('{')
-  const end = cleaned.lastIndexOf('}')
-  if (start >= 0 && end > start) {
-    try { return JSON.parse(cleaned.slice(start, end + 1)) } catch {}
-  }
-  // Try array
-  const arrStart = cleaned.indexOf('[')
-  const arrEnd = cleaned.lastIndexOf(']')
-  if (arrStart >= 0 && arrEnd > arrStart) {
-    try { return JSON.parse(cleaned.slice(arrStart, arrEnd + 1)) } catch {}
-  }
+  const cleaned = stripThinkBlocks(text).trim()
+  const direct = parseJsonCandidate(cleaned)
+  if (direct !== null) return direct
+
+  const object = parseBalancedJson(cleaned, '{')
+  if (object !== null) return object
+
+  const array = parseBalancedJson(cleaned, '[')
+  if (array !== null) return array
+
   return null
 }
 
@@ -221,13 +282,15 @@ export async function callWithJsonParse<T>(
   const primary = modelConfig.primary
   const providerKey = `${primary.provider}:${primary.model}`
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const attemptFailures: string[] = []
 
   // Circuit breaker check on primary
   if (options?.health) {
     const healthy = await isHealthy(options.health, providerKey)
     if (!healthy) {
       console.log(`[callWithJsonParse] Skipping ${providerKey} (circuit open), going to fallbacks`)
-      return attemptFallbacks(taskType, modelConfig.fallbacks, systemPrompt, userContent, ai, geminiKey, options)
+      attemptFailures.push(formatAttemptFailure(`${providerKey}:primary`, 'circuit breaker open'))
+      return attemptFallbacks(taskType, modelConfig.fallbacks, systemPrompt, userContent, ai, geminiKey, options, attemptFailures)
     }
   }
 
@@ -251,12 +314,16 @@ export async function callWithJsonParse<T>(
     }
 
     const resp1 = await withTimeout(provider.generateResponse(request), timeoutMs, `${taskType}:primary`)
-    reportUsage(options, taskType, primary.model, primary.provider, resp1.usage)
+    await reportUsage(options, taskType, primary.model, primary.provider, resp1.usage)
     const parsed1 = extractJson(resp1.content)
     if (parsed1 !== null) {
       if (options?.health) await recordSuccess(options.health, providerKey)
       return { result: parsed1 as T, modelUsed: primary.model }
     }
+    attemptFailures.push(formatAttemptFailure(
+      `${providerKey}:primary`,
+      `json_parse:no_valid_json response_chars=${resp1.content.length}`,
+    ))
 
     // Attempt 2: retry with stricter instruction
     const retryRequest = {
@@ -267,20 +334,25 @@ export async function callWithJsonParse<T>(
       ],
     }
     const resp2 = await withTimeout(provider.generateResponse(retryRequest), timeoutMs, `${taskType}:retry`)
-    reportUsage(options, taskType, primary.model, primary.provider, resp2.usage)
+    await reportUsage(options, taskType, primary.model, primary.provider, resp2.usage)
     const parsed2 = extractJson(resp2.content)
     if (parsed2 !== null) {
       if (options?.health) await recordSuccess(options.health, providerKey)
       return { result: parsed2 as T, modelUsed: primary.model + ':retry' }
     }
+    attemptFailures.push(formatAttemptFailure(
+      `${providerKey}:retry`,
+      `json_parse:no_valid_json response_chars=${resp2.content.length}`,
+    ))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    attemptFailures.push(formatAttemptFailure(`${providerKey}:primary_or_retry`, msg))
     console.warn(`[callWithJsonParse] primary failed for ${taskType}: ${msg}`)
     if (options?.health) await recordFailure(options.health, providerKey)
   }
 
   // Attempt 3: fallbacks
-  return attemptFallbacks(taskType, modelConfig.fallbacks, systemPrompt, userContent, ai, geminiKey, options)
+  return attemptFallbacks(taskType, modelConfig.fallbacks, systemPrompt, userContent, ai, geminiKey, options, attemptFailures)
 }
 
 async function attemptFallbacks<T>(
@@ -291,6 +363,7 @@ async function attemptFallbacks<T>(
   ai: Ai,
   geminiKey: string,
   options?: CallOptions,
+  attemptFailures: string[] = [],
 ): Promise<{ result: T; modelUsed: string }> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
@@ -301,6 +374,7 @@ async function attemptFallbacks<T>(
       const healthy = await isHealthy(options.health, fbKey)
       if (!healthy) {
         console.log(`[callWithJsonParse] Skipping fallback ${fbKey} (circuit open)`)
+        attemptFailures.push(formatAttemptFailure(`${fbKey}:fallback`, 'circuit breaker open'))
         continue
       }
     }
@@ -331,7 +405,7 @@ async function attemptFallbacks<T>(
         }), timeoutMs, `${taskType}:fallback:${fb.model}`)
         text = fbResp.content
         // Gemini fallback via gateway doesn't expose usage; Workers AI does.
-        reportUsage(options, taskType, fb.model, fb.provider, fbResp.usage)
+        await reportUsage(options, taskType, fb.model, fb.provider, fbResp.usage)
       }
 
       const parsed = extractJson(text)
@@ -339,11 +413,18 @@ async function attemptFallbacks<T>(
         if (options?.health) await recordSuccess(options.health, fbKey)
         return { result: parsed as T, modelUsed: fb.model + ':fallback' }
       }
+      attemptFailures.push(formatAttemptFailure(
+        `${fbKey}:fallback`,
+        `json_parse:no_valid_json response_chars=${text.length}`,
+      ))
     } catch (e) {
-      console.warn(`[callWithJsonParse] fallback ${fb.model} failed for ${taskType}: ${e instanceof Error ? e.message : e}`)
+      const msg = e instanceof Error ? e.message : String(e)
+      attemptFailures.push(formatAttemptFailure(`${fbKey}:fallback`, msg))
+      console.warn(`[callWithJsonParse] fallback ${fb.model} failed for ${taskType}: ${msg}`)
       if (options?.health) await recordFailure(options.health, fbKey)
     }
   }
 
-  throw new Error(`[callWithJsonParse] All attempts failed for ${taskType}. No valid JSON produced.`)
+  const detail = attemptFailures.length ? ` Details: ${attemptFailures.join(' | ')}` : ''
+  throw new Error(`[callWithJsonParse] All attempts failed for ${taskType}.${detail}`)
 }
