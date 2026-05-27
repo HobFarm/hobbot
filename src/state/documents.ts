@@ -147,9 +147,18 @@ export async function searchChunks(
   if (opts.document_id) { parts.push('c.document_id = ?'); binds.push(opts.document_id) }
 
   binds.push(limit)
-  const sql = `SELECT c.*, d.title as document_title
+  // Source Bundle Acceptance Contract: surface source_url + bundle lineage
+  // on chunk results so chat tools can cite "from source X (bundle Y)".
+  // source_bundles is LEFT JOINed because most documents have no bundle.
+  const sql = `SELECT c.*, d.title as document_title,
+                      d.source_url as source_url,
+                      d.source_bundle_id as source_bundle_id,
+                      d.source_bundle_file_path as source_bundle_file_path,
+                      d.bundle_file_role as bundle_file_role,
+                      sb.title as source_bundle_title
     FROM document_chunks c
     ${joins.join('\n    ')}
+    LEFT JOIN source_bundles sb ON d.source_bundle_id = sb.bundle_id
     WHERE ${parts.join(' AND ')}
     ORDER BY c.chunk_index ASC
     LIMIT ?`
@@ -158,6 +167,11 @@ export async function searchChunks(
   return (result.results ?? []).map(row => ({
     ...fromChunkRow(row),
     document_title: row.document_title,
+    source_url: row.source_url,
+    source_bundle_id: row.source_bundle_id,
+    source_bundle_title: row.source_bundle_title,
+    source_bundle_file_path: row.source_bundle_file_path,
+    bundle_file_role: row.bundle_file_role,
   }))
 }
 

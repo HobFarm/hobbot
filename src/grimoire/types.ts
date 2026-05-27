@@ -408,10 +408,71 @@ export function fromChunkRow(row: DocumentChunkRow): DocumentChunk {
 
 export interface ChunkSearchResult extends DocumentChunk {
   document_title: string
+  source_url: string | null
+  source_bundle_id: string | null
+  source_bundle_title: string | null
+  source_bundle_file_path: string | null
+  bundle_file_role: string | null
 }
 
 export interface ChunkSearchResultRow extends DocumentChunkRow {
   document_title: string
+  source_url: string | null
+  source_bundle_id: string | null
+  source_bundle_title: string | null
+  source_bundle_file_path: string | null
+  bundle_file_role: string | null
+}
+
+// ---------- Source Bundle Acceptance Contract ----------
+// Roles operators declare on each file in an R2 source-bundle manifest.
+// See workers/grimoire/migrations/0056_source_bundles.sql + the bundle
+// acceptance contract docs.
+export const BUNDLE_FILE_ROLES = [
+  'clean_text',     // primary OCR/edited text — drives chunks
+  'source_image',   // page scan — image pipeline + provenance
+  'cover',          // bundle cover image
+  'page',           // numbered interior page
+  'detail',         // crop / zoom of a page region
+  'audio',          // reserved for future ingest
+  'transcript',     // alternate text variant (raw OCR, transcript, etc.)
+  'metadata',       // catalog-only sidecar (CSV, JSON), no chunking
+] as const
+
+export type BundleFileRole = typeof BUNDLE_FILE_ROLES[number]
+
+export type SourceBundleStatus = 'open' | 'complete' | 'superseded' | 'failed'
+export type SourceBundleFileStatus = 'declared' | 'processing' | 'documented' | 'failed' | 'skipped'
+
+export interface SourceBundle {
+  bundle_id: string
+  source_slug: string
+  title: string | null
+  meta_json: Record<string, unknown>
+  manifest_file_count: number
+  status: SourceBundleStatus
+  created_at: string
+  updated_at: string
+}
+
+export interface SourceBundleRow extends Omit<SourceBundle, 'meta_json'> {
+  meta_json: string
+}
+
+export interface SourceBundleFile {
+  bundle_id: string
+  file_path: string
+  r2_key: string
+  file_role: BundleFileRole
+  file_order: number | null
+  file_language: string | null
+  notes: string | null
+  document_id: string | null
+  ingest_log_id: string | null
+  status: SourceBundleFileStatus
+  error_message: string | null
+  created_at: string
+  updated_at: string
 }
 
 // Quality gate for new atoms from any source
