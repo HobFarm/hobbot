@@ -4,13 +4,13 @@
 >
 > `HobBot/` is a separate git repository nested inside the grimoire tree (own `.git`, excluded from grimoire `.gitignore`, **not** included in grimoire git worktrees). Builds for any `hobbot-*` worker fail in worktrees because `@shared/*` resolves to `../../HobBot/src/*`. Always work from the main checkout.
 
-**LAST_UPDATED:** 2026-05-08. If more than seven days old, treat specific claims as suspect — see [Stale Instruction Policy](../CLAUDE.md#stale-instruction-policy).
+**LAST_UPDATED:** 2026-05-31. If more than seven days old, treat specific claims as suspect — see [Stale Instruction Policy](../CLAUDE.md#stale-instruction-policy).
 
 ## What This Worker Does
 
-API surface for the entire HobBot swarm. Serves MCP tools, HTTP API routes, and delegates heavy operations to child workers via Cloudflare Service Bindings (zero-cost, same-thread RPC). Also serves the MCP endpoint that claude.ai connects to.
+Pure API surface for the entire HobBot swarm. Three jobs: the MCP server (the `/mcp` endpoint claude.ai connects to), `/api/*` routing, and newsletter subscription. Everything heavy delegates to child workers via Cloudflare Service Bindings — `GRIMOIRE` (fetch), `HOBBOT_CHAT` (fetch proxy), `HOBBOT_CUSTODIAN` and `HOBBOT_PIPELINE` (typed RPC).
 
-The gateway has no AI providers and no R2. Its only cron is a daily 3am UTC retention cleanup on HOBBOT_DB tables it owns (`tool_executions`, `hobbot_actions`, `token_usage`); see the `scheduled()` handler in [src/index.ts](src/index.ts). Pure routing otherwise.
+No AI providers, no R2. Its only cron is a daily 3am UTC (`0 3 * * *`) retention cleanup on HOBBOT_DB tables it owns (`tool_executions`, `hobbot_actions`, `token_usage`); see the `scheduled()` handler in [src/index.ts](src/index.ts). The `GRIMOIRE_DB` binding is READ-ONLY (atom-level writes go through `grimoire/ingest.ts`, all other Grimoire mutation routes through the `GRIMOIRE` binding). Pure routing otherwise.
 
 **Plasticity substrate posture.** The gateway is a read-only consumer of the plasticity substrate. It never invokes `reinforcePair`, `reinforceFromDiscovery`, or `buildInsertWithContribution` — all `correspondences` mutation goes through the grimoire worker via the `GRIMOIRE` service binding. See the [Write-Path Registry](../CLAUDE.md#write-path-registry) in the root CLAUDE.md.
 
@@ -241,7 +241,9 @@ Imported by every worker via `@shared/*` tsconfig path alias (`paths: { "@shared
 5. If touching shared code, understand that ALL child workers depend on it
 6. If adding a new RPC method, the child worker's Entrypoint class must export it first
 
-### Multi-Agent Safety
+### Git Hygiene
+
+Solo project, but parallel CC sessions still trip over each other's working tree:
 
 - Do not create, apply, or drop git stash entries unless explicitly asked
 - Do not switch branches unless explicitly asked
@@ -261,7 +263,7 @@ Imported by every worker via `@shared/*` tsconfig path alias (`paths: { "@shared
 
 ### D1 Migrations
 
-HobBot writes to `hobbot-db` (binding `HOBBOT_DB`), with migrations at `HobBot/migrations/hobbot/`. Production apply uses `npx wrangler d1 migrations apply hobbot-db --remote` from the `HobBot/` directory and requires explicit user approval for that database and migration set.
+HobBot writes to `hobbot-db` (binding `HOBBOT_DB`), with migrations at `HobBot/migrations/hobbot/`. Production apply uses `npx wrangler d1 migrations apply hobbot-db --remote` from the `HobBot/` directory. A remote migration is a real hard stop: it mutates production schema and is awkward to undo, so confirm before applying. Writing the migration file and validating locally needs no ceremony.
 
 **Rules are identical to the grimoire worker.** See [workers/grimoire/CLAUDE.md](../workers/grimoire/CLAUDE.md) "D1 Migrations" section for the full list (idempotent migrations, never use `--command/--file` for schema, sequential numbering, table-rebuild pattern for CHECK changes, manual-apply requires immediate `INSERT INTO d1_migrations`). The cross-cutting Migration Safety Rules in the [root CLAUDE.md](../CLAUDE.md) also apply.
 
@@ -284,7 +286,7 @@ npm run build
 npx wrangler deploy
 ```
 
-`npm run build` is the normal validation command. `npx wrangler deploy` mutates production and requires explicit user approval for this worker and current diff.
+`npm run build` is the normal validation command. If it builds clean, ship it. `npx wrangler deploy` pushes whatever is on disk to production — so before deploying, confirm `git diff --name-only` shows only `HobBot/` files (deploying another session's uncommitted work is the failure mode the Deploy Rules guard against), then deploy. The only hard stop here is the usual one: don't deploy on top of unknown changes from another session.
 
 The cross-cutting Deploy Rules live in the [root CLAUDE.md](../CLAUDE.md#deploy-rules) — read those first (they cover deploy order, the worktree warning, the git-status precheck, and the `git diff --name-only` rule).
 
