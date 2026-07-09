@@ -2,10 +2,10 @@
 
 export type TaskType =
   | 'validate.duplicate'        // AI duplicate check
-  | 'image.analyze'             // Vision classification (Workers AI primary, Gemini fallback)
+  | 'image.analyze'             // Vision classification (Workers AI primary/fallback)
   | 'image.analyze.curated'     // Curated R2 ingest vision (Kimi K2.6 with Gemma fallback). Reads brand text + translates non-English body copy.
   | 'knowledge.extract'         // knowledge ingest extraction (legacy, kept for backward compat)
-  | 'blog.compose'              // blog post generation (Nemotron primary, Gemini fallback)
+  | 'blog.compose'              // blog post generation (Workers AI chain)
   | 'pipeline.enrichment'       // per-chunk enrichment: summary, categories, arrangements, concepts (also used by cron safety net)
   // chunk.summary and moodboard.aggregate live in workers/grimoire/src/models.ts (authoritative for grimoire-only tasks)
   | 'pipeline.vocabulary'       // vocabulary matching: semantic disambiguation
@@ -22,15 +22,15 @@ export type TaskType =
   | 'chat.dashscope'            // External fallback (DashScope qwen-plus)
   | 'chat.summarize'            // Conversation history summarization (BART, summarization API not chat completions)
   // Classifier tasks (moved from workers/grimoire-classifier/src/ai.ts)
-  | 'classifier.batch'          // Bulk atom classification + harmonics (Nemotron primary, Gemini fallback)
+  | 'classifier.batch'          // Bulk atom classification + harmonics (Workers AI chain)
   // Agent tasks (moved from workers/hobbot-agent/src/models.ts)
   | 'agent.compose'             // X post text composition (Llama 70B primary, Claude fallback)
   | 'agent.signal'              // Trending signal gathering (Grok, skip on fail)
   | 'agent.validate'            // Content safety (Llama Guard, inline fallback)
-  | 'agent.classify'            // Post categorization (Gemini Flash Lite primary, Llama 8B fallback)
+  | 'agent.classify'            // Post categorization (Workers AI chain)
   | 'agent.visualize'           // Image generation (FLUX-2 Dev primary, FLUX-1 + Lucid fallbacks)
 
-export type ProviderType = 'gemini' | 'workers-ai' | 'dashscope' | 'anthropic' | 'xai' | 'inline'
+export type ProviderType = 'workers-ai' | 'dashscope' | 'anthropic' | 'xai' | 'inline'
 
 // --- Model Entry ---
 
@@ -58,8 +58,8 @@ export interface TaskConfig {
 export const MODELS: Record<TaskType, TaskConfig> = {
   'validate.duplicate': {
     primary: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/ibm-granite/granite-4.0-h-micro',
       options: { temperature: 0.1, maxOutputTokens: 200 },
     },
     fallbacks: [],
@@ -107,8 +107,9 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   },
   'knowledge.extract': {
     primary: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/zai-org/glm-4.7-flash',
+      options: { temperature: 0.2, maxOutputTokens: 4096, responseFormat: 'json' },
     },
     fallbacks: [],
   },
@@ -119,8 +120,8 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.8, maxOutputTokens: 4096 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
       options: { temperature: 0.8, maxOutputTokens: 4096 },
     }],
   },
@@ -215,8 +216,8 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.3, maxOutputTokens: 512 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
       options: { temperature: 0.3, maxOutputTokens: 512 },
     }],
   },
@@ -228,8 +229,8 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.3, maxOutputTokens: 512 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/ibm-granite/granite-4.0-h-micro',
       options: { temperature: 0.3, maxOutputTokens: 512 },
     }],
   },
@@ -241,8 +242,8 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.1, maxOutputTokens: 128 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/meta/llama-3.1-8b-instruct',
       options: { temperature: 0.1, maxOutputTokens: 128 },
     }],
   },
@@ -340,7 +341,7 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   // --- Classifier tasks (moved from workers/grimoire-classifier/src/ai.ts) ---
 
   // Bulk classification: category + harmonics for up to 100 atoms per call.
-  // High maxOutputTokens for batch JSON response. thinkingBudget 0 for Gemini.
+  // High maxOutputTokens for batch JSON response.
   'classifier.batch': {
     primary: {
       provider: 'workers-ai',
@@ -348,8 +349,8 @@ export const MODELS: Record<TaskType, TaskConfig> = {
       options: { temperature: 0.1, maxOutputTokens: 8192 },
     },
     fallbacks: [{
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'workers-ai',
+      model: '@cf/qwen/qwen3-30b-a3b-fp8',
       options: { temperature: 0.1, maxOutputTokens: 8192, thinkingBudget: 0 },
     }],
   },
@@ -395,13 +396,13 @@ export const MODELS: Record<TaskType, TaskConfig> = {
   },
   'agent.classify': {
     primary: {
-      provider: 'gemini',
-      model: 'gemini-3.1-flash-lite-preview',
-      options: { temperature: 0.1, maxOutputTokens: 1024, thinkingBudget: 0 },
+      provider: 'workers-ai',
+      model: '@cf/meta/llama-3.1-8b-instruct',
+      options: { temperature: 0.1, maxOutputTokens: 1024, responseFormat: 'json' },
     },
     fallbacks: [{
       provider: 'workers-ai',
-      model: '@cf/meta/llama-3.1-8b-instruct',
+      model: '@cf/ibm-granite/granite-4.0-h-micro',
       options: { temperature: 0.1, maxOutputTokens: 1024, responseFormat: 'json' },
     }],
   },

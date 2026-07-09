@@ -1,7 +1,6 @@
 // Provider factory and abstraction
 
 import type { AIProvider } from './types';
-import { GeminiProvider, GeminiLocationError } from './gemini';
 import { WorkersAIProvider } from './workers-ai';
 
 export function getProvider(
@@ -9,10 +8,6 @@ export function getProvider(
   model: string,
   apiKeyOrAi: string | Ai
 ): AIProvider {
-  if (name === 'gemini') {
-    return new GeminiProvider(model, apiKeyOrAi as string);
-  }
-
   if (name === 'workers-ai') {
     return new WorkersAIProvider(model, apiKeyOrAi as Ai);
   }
@@ -32,6 +27,5 @@ export async function resolveApiKey(key: string | { get: () => Promise<string> }
 
 // Re-export types and errors for convenience
 export type { AIProvider, AIRequest, AIResponse, AIMessage, AIUsage } from './types';
-export { GeminiLocationError } from './gemini';
 export { createTokenLogger } from './token-log';
 export type { TokenUsageReport } from './call-with-json-parse';

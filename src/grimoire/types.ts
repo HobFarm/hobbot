@@ -226,7 +226,7 @@ export interface ValidationWarning {
 }
 
 export interface ProviderRecommendation {
-  provider: 'gemini' | 'claude' | 'grok' | 'openai'
+  provider: 'workers-ai' | 'claude' | 'grok' | 'openai'
   confidence: number
   prompt_hint: string
   known_failures: string[]
@@ -638,7 +638,7 @@ export function fromIngestLogRow(row: IngestLogRow): IngestLog {
   }
 }
 
-// Gemini extraction output shapes
+// Extraction output shapes
 
 export interface AestheticExtraction {
   aesthetic_name: string

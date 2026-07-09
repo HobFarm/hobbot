@@ -381,7 +381,7 @@ export function registerAdminTools(server: McpServer, env: Env) {
       queues: [],
       ai: true,
       services: ['GRIMOIRE'],
-      secrets: ['GEMINI_API_KEY', 'INTERNAL_SECRET', 'GITHUB_TOKEN'],
+      secrets: ['INTERNAL_SECRET', 'GITHUB_TOKEN'],
     },
     'hobbot-custodian': {
       d1: ['GRIMOIRE_DB', 'HOBBOT_DB'],
@@ -390,7 +390,7 @@ export function registerAdminTools(server: McpServer, env: Env) {
       queues: [],
       ai: true,
       services: ['GRIMOIRE'],
-      secrets: ['SERVICE_TOKENS', 'GEMINI_API_KEY', 'AI_GATEWAY_TOKEN'],
+      secrets: ['SERVICE_TOKENS'],
     },
     'hobbot-chat': {
       d1: ['GRIMOIRE_DB', 'HOBBOT_DB'],
@@ -408,7 +408,7 @@ export function registerAdminTools(server: McpServer, env: Env) {
       queues: ['CLASSIFY_QUEUE', 'DISCOVERY_QUEUE', 'VECTORIZE_QUEUE', 'ENRICH_QUEUE'],
       ai: true,
       services: [],
-      secrets: ['GEMINI_API_KEY', 'AI_GATEWAY_TOKEN', 'SERVICE_TOKENS'],
+      secrets: ['AI_GATEWAY_TOKEN', 'SERVICE_TOKENS'],
     },
   }
 

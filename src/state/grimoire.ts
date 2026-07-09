@@ -163,11 +163,12 @@ export async function getProviderRoute(
   ).bind(taskType, taskType).first<Record<string, unknown>>()
 
   if (!row) {
-    return { provider: 'gemini', confidence: 0.5, prompt_hint: '', known_failures: [] }
+    return { provider: 'workers-ai', confidence: 0.5, prompt_hint: '', known_failures: [] }
   }
 
+  const rawProvider = row.provider === 'gemini' ? 'workers-ai' : row.provider
   return {
-    provider: (row.provider as ProviderRecommendation['provider']) ?? 'gemini',
+    provider: (rawProvider as ProviderRecommendation['provider']) ?? 'workers-ai',
     confidence: (row.confidence as number) ?? 0.5,
     prompt_hint: (row.prompt_hint as string) ?? '',
     known_failures: JSON.parse((row.known_failures as string) ?? '[]'),

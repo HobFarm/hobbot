@@ -176,7 +176,7 @@ export function createGrimoireMcpServer(env: Env): McpServer {
 
   server.tool(
     'grimoire_ingest_knowledge',
-    'Extract and ingest structured knowledge from a URL into the Grimoire. Fetches the page, extracts visual/creative vocabulary via Gemini, and inserts atoms through the classification pipeline. Supports aesthetic (Aesthetics Wiki, art movements) and domain (Wikipedia, reference material) source types. Use dry_run to preview extraction without inserting.',
+    'Extract and ingest structured knowledge from a URL into the Grimoire. Fetches the page, extracts visual/creative vocabulary via Workers AI, and inserts atoms through the classification pipeline. Supports aesthetic (Aesthetics Wiki, art movements) and domain (Wikipedia, reference material) source types. Use dry_run to preview extraction without inserting.',
     {
       url: z.string().url().describe('URL to fetch and extract knowledge from'),
       source_type: z.enum(['aesthetic', 'domain']).default('aesthetic').describe('aesthetic = visual style pages. domain = topic/reference material.'),

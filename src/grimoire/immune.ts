@@ -14,12 +14,12 @@ interface DuplicateCheckResult {
 // Check if two atoms are semantically duplicate using AI judgment
 // Only called when text_lower is different but text is very similar
 export async function aiDuplicateCheck(
-  apiKey: string,
+  ai: Ai,
   candidate: Partial<GrimoireAtom>,
   existing: GrimoireAtom
 ): Promise<DuplicateCheckResult> {
   const { model } = MODELS['validate.duplicate'].primary
-  const provider = getProvider('gemini', model, apiKey)
+  const provider = getProvider('workers-ai', model, ai)
 
   const prompt = `Are these two grimoire entries semantically equivalent?
 
